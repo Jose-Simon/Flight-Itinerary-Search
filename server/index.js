@@ -69,7 +69,12 @@ if (isProd) {
     process.exit(1);
   }
   app.use(express.static(dist));
-  app.get('*', (_req, res) => {
+  /** Express 5 / path-to-regexp v8 rejects `*`; fall through from static → SPA shell. */
+  app.use((req, res, next) => {
+    if (req.method !== 'GET' || req.path.startsWith('/api')) {
+      next();
+      return;
+    }
     res.sendFile(path.join(dist, 'index.html'));
   });
 }
