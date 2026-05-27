@@ -1,0 +1,45 @@
+{
+  "search_metadata": { "status": "Success" },
+  "best_flights": [
+    {
+      "flights": [
+        {
+          "departure_airport": { "name": "Heathrow", "id": "LHR", "time": "2026-05-20 10:00" },
+          "arrival_airport": { "name": "John F Kennedy", "id": "JFK", "time": "2026-05-20 13:30" },
+          "duration": 510,
+          "airplane": "Boeing 777",
+          "airline": "BA",
+          "flight_number": "BA 113",
+          "extensions": []
+        }
+      ],
+      "layovers": [],
+      "total_duration": 510
+    },
+    {
+      "flights": [
+        {
+          "departure_airport": { "name": "Heathrow", "id": "LHR", "time": "2026-05-20 09:00" },
+          "arrival_airport": { "name": "Shannon", "id": "SNN", "time": "2026-05-20 10:45" },
+          "duration": 105,
+          "airplane": "Airbus A320",
+          "airline": "EI",
+          "flight_number": "EI 381",
+          "extensions": []
+        },
+        {
+          "departure_airport": { "name": "Shannon", "id": "SNN", "time": "2026-05-20 13:00" },
+          "arrival_airport": { "name": "John F Kennedy", "id": "JFK", "time": "2026-05-20 15:40" },
+          "duration": 460,
+          "airplane": "Airbus A330",
+          "airline": "EI",
+          "flight_number": "EI 111",
+          "extensions": []
+        }
+      ],
+      "layovers": [{ "duration": 135, "name": "Shannon", "id": "SNN" }],
+      "total_duration": 700
+    }
+  ],
+  "other_flights": []
+}

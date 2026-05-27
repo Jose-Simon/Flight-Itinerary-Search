@@ -1,0 +1,69 @@
+{
+  "search_metadata": { "status": "Success" },
+  "best_flights": [
+    {
+      "flights": [
+        {
+          "departure_airport": { "name": "John F Kennedy", "id": "JFK", "time": "2026-05-10 18:10" },
+          "arrival_airport": { "name": "Heathrow", "id": "LHR", "time": "2026-05-11 06:20" },
+          "duration": 430,
+          "airplane": "Boeing 777",
+          "airline": "BA",
+          "flight_number": "BA 112",
+          "extensions": ["Wi-Fi", "Meals"]
+        }
+      ],
+      "layovers": [],
+      "total_duration": 430
+    },
+    {
+      "flights": [
+        {
+          "departure_airport": { "name": "John F Kennedy", "id": "JFK", "time": "2026-05-10 10:00" },
+          "arrival_airport": { "name": "Dublin", "id": "DUB", "time": "2026-05-10 21:30" },
+          "duration": 390,
+          "airplane": "Airbus A330",
+          "airline": "EI",
+          "flight_number": "EI 104",
+          "extensions": []
+        },
+        {
+          "departure_airport": { "name": "Dublin", "id": "DUB", "time": "2026-05-11 08:15" },
+          "arrival_airport": { "name": "Heathrow", "id": "LHR", "time": "2026-05-11 09:45" },
+          "duration": 90,
+          "airplane": "Airbus A320",
+          "airline": "EI",
+          "flight_number": "EI 152",
+          "extensions": []
+        }
+      ],
+      "layovers": [{ "duration": 645, "name": "Dublin Airport", "id": "DUB" }],
+      "total_duration": 1125
+    },
+    {
+      "flights": [
+        {
+          "departure_airport": { "name": "John F Kennedy", "id": "JFK", "time": "2026-05-10 22:00" },
+          "arrival_airport": { "name": "Reykjavik", "id": "KEF", "time": "2026-05-11 07:10" },
+          "duration": 370,
+          "airplane": "Boeing 737 MAX",
+          "airline": "FI",
+          "flight_number": "FI 614",
+          "extensions": []
+        },
+        {
+          "departure_airport": { "name": "Reykjavik", "id": "KEF", "time": "2026-05-11 08:05" },
+          "arrival_airport": { "name": "Heathrow", "id": "LHR", "time": "2026-05-11 11:30" },
+          "duration": 205,
+          "airplane": "Boeing 757",
+          "airline": "FI",
+          "flight_number": "FI 450",
+          "extensions": ["Technical stop possible"]
+        }
+      ],
+      "layovers": [{ "duration": 55, "name": "Keflavik", "id": "KEF" }],
+      "total_duration": 630
+    }
+  ],
+  "other_flights": []
+}

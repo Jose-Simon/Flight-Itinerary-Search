@@ -1,0 +1,44 @@
+{
+  "name": "flight-itinerary-discovery",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently -k \"npm:dev:vite\" \"npm:dev:server\"",
+    "dev:vite": "vite",
+    "dev:server": "cross-env NODE_ENV=development node server/index.js",
+    "build": "npm run build:data && tsc -b && vite build",
+    "build:data": "node scripts/build-airports.mjs && node scripts/build-airlines.mjs",
+    "start": "cross-env NODE_ENV=production node server/index.js",
+    "lint": "eslint .",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "concurrently": "^9.2.1",
+    "express": "^5.2.1",
+    "leaflet": "^1.9.4",
+    "luxon": "^3.7.2",
+    "react": "^19.2.5",
+    "react-dom": "^19.2.5",
+    "sql.js": "^1.14.1"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.4",
+    "@types/express": "^5.0.6",
+    "@types/leaflet": "^1.9.21",
+    "@types/luxon": "^3.7.1",
+    "@types/node": "^24.12.2",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@types/sql.js": "^1.4.11",
+    "@vitejs/plugin-react": "^6.0.1",
+    "cross-env": "^10.1.0",
+    "eslint": "^9.39.4",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "eslint-plugin-react-refresh": "^0.5.2",
+    "globals": "^17.5.0",
+    "typescript": "~6.0.2",
+    "typescript-eslint": "^8.58.2",
+    "vite": "^8.0.9"
+  }
+}
