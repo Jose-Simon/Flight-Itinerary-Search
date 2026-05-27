@@ -32,7 +32,7 @@ npm start
 ## Render.com
 
 1. Create a **Web Service** (not a Static Site) and point it at this repository.
-2. Use **Build command**: `npm ci && npm run build`
+2. Use **Build command**: `npm install --no-audit --no-fund && npm run build` (prefer this over `npm ci` when the lockfile was generated elsewhere: Linux CI may resolve optional wasm peers like `@emnapi/*` differently.)
 3. **Start command**: `npm start`
 4. Set **Health check path** to `/health` (optional; also configured in `render.yaml` if you use [Blueprint](https://render.com/docs/blueprint-spec)).
 
