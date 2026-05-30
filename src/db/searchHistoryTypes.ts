@@ -4,9 +4,19 @@ export type SearchHistorySnapshotV1 = {
   origins: string[]
   destinations: string[]
   tripType: 'oneway' | 'round'
+  searchGoal?: 'discovery' | 'priceWindow'
   outboundDate: string
+  outboundEnd?: string
   returnDate: string
-  flexDays: number
+  returnEnd?: string
+  /** Price window outbound date range (priceWindow goal only) */
+  pwOutStart?: string
+  pwOutEnd?: string
+  /** Price window return date range (priceWindow goal, round trip only) */
+  pwRetStart?: string
+  pwRetEnd?: string
+  /** @deprecated kept for reading old history entries; use outboundEnd / returnEnd instead */
+  flexDays?: number
   searchSource: 'api' | 'db'
   mockMode: boolean
   deepSearch: boolean

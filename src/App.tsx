@@ -39,7 +39,19 @@ import {
 import { itineraryInsightStats } from './lib/resultStats'
 import { itineraryCountsByAirline } from './lib/resultInsights'
 import type { NormalizedItinerary } from './lib/types'
-import { searchDirection, type SearchFlightInput, type SerpSearchDebugBundle } from './services/searchFlights'
+import {
+  searchDirection,
+  searchPriceWindow,
+  dateRange as pwDateRange,
+  dateWindow,
+  type SearchFlightInput,
+  type SerpSearchDebugBundle,
+  type PriceWindowSearchInput,
+  type PriceWindowPerDateEntry,
+} from './services/searchFlights'
+import { mergePerDateUnique } from './lib/pipeline'
+import { buildPriceWindowResult, reverseRouteKey, type PriceWindowResult } from './lib/routeGrouping'
+import { PriceWindowPanel } from './components/PriceWindowPanel'
 import { buildSerpDownloadPayload, downloadJson } from './lib/serpDebugExport'
 import { passesTimeBucketFilter, type TimeOfDayBucket } from './lib/timeBuckets'
 import {
@@ -54,14 +66,37 @@ import { inferAircraftManufacturer } from './lib/aircraftManufacturer'
 import { savedSearchTitleFromPayload } from './lib/savedSearchLabels'
 import { OTHER_HUBS_REGION_ID, unmappedLayoverHubStats } from './lib/unmappedLayoverHubs'
 import type { SearchHistoryRow, SearchHistorySnapshotV1 } from './db/searchHistoryTypes'
-import type { SavedResultPayloadV1 } from './db/savedResultTypes'
+import type { SavedResultPayloadV1, SavedResultPayloadV2 } from './db/savedResultTypes'
+import { SavedRoundTripsList } from './components/SavedRoundTripsList'
 import type { SavedSearchPayloadV1 } from './db/savedSearchTypes'
+import { ConfigPresetsBar } from './components/ConfigPresetsBar'
+import { SerpApiUsageChip } from './components/SerpApiUsageChip'
+import { ErrorBoundary } from './components/ErrorBoundary'
+import { useConfigPresets } from './hooks/useConfigPresets'
+import { useSerpApiUsage } from './hooks/useSerpApiUsage'
+import type { FilterSnapshot, DateSnapshot, ConfigSnapshot } from './lib/filterPresetTypes'
 
 function emptyToNull(s: string): number | null {
   const t = s.trim()
   if (!t) return null
   const n = Number(t)
   return Number.isFinite(n) ? n : null
+}
+
+function addDaysIso(iso: string, days: number): string {
+  const d = new Date(iso + 'T12:00:00Z')
+  d.setUTCDate(d.getUTCDate() + days)
+  return d.toISOString().slice(0, 10)
+}
+
+/** Convert a [startDate, endDate] range into centerDate + flexDays for the SearchFlightInput API. */
+function dateRangeToCenterFlex(start: string, end: string): { centerDate: string; flexDays: number } {
+  const startMs = new Date(start + 'T12:00:00Z').getTime()
+  const endMs = new Date(end + 'T12:00:00Z').getTime()
+  const diffDays = Math.max(0, Math.round((endMs - startMs) / 86400000))
+  const flex = Math.min(14, Math.ceil(diffDays / 2))
+  const centerDate = flex > 0 ? addDaysIso(start, flex) : start
+  return { centerDate, flexDays: flex }
 }
 
 const TIME_BUCKET_DEFS: { id: TimeOfDayBucket; label: string; hint: string }[] = [
@@ -155,8 +190,9 @@ export default function App() {
   const [destinations, setDestinations] = useState<string[]>(['MAA', 'TRV', 'IXM', 'BLR', 'COK'])
   const [tripType, setTripType] = useState<'oneway' | 'round'>('oneway')
   const [outboundDate, setOutboundDate] = useState('2026-07-09')
+  const [outboundEnd, setOutboundEnd] = useState('2026-07-09')
   const [returnDate, setReturnDate] = useState('2026-07-19')
-  const [flexDays, setFlexDays] = useState(0)
+  const [returnEnd, setReturnEnd] = useState('2026-07-19')
   const [outHours, setOutHours] = useState<HourFieldStrings>({ ...EMPTY_HOURS })
   const [retHours, setRetHours] = useState<HourFieldStrings>({ ...EMPTY_HOURS })
   const [outPrice, setOutPrice] = useState<PriceFieldStrings>({ ...EMPTY_PRICE })
@@ -197,7 +233,16 @@ export default function App() {
   const [timeBucketsRet, setTimeBucketsRet] = useState<Set<TimeOfDayBucket>>(new Set())
   const [displayTimezone, setDisplayTimezone] = useState('')
 
+  const [searchGoal, setSearchGoal] = useState<'discovery' | 'priceWindow'>('discovery')
+  const [pwOutResult, setPwOutResult] = useState<PriceWindowResult | null>(null)
+  const [pwRetResult, setPwRetResult] = useState<PriceWindowResult | null>(null)
+  const [pwOutboundSel, setPwOutboundSel] = useState<{ routeKey: string; date: string; pickedIdx?: number; selectedItinerary?: NormalizedItinerary } | null>(null)
+  const [pwReturnSel, setPwReturnSel] = useState<{ routeKey: string; date: string; pickedIdx?: number; selectedItinerary?: NormalizedItinerary } | null>(null)
+  const [pwRawOutPerDate, setPwRawOutPerDate] = useState<PriceWindowPerDateEntry[]>([])
+  const [pwRawRetPerDate, setPwRawRetPerDate] = useState<PriceWindowPerDateEntry[]>([])
+
   const [loading, setLoading] = useState(false)
+  const [searchRefreshKey, setSearchRefreshKey] = useState(0)
   const [error, setError] = useState<string | null>(null)
   const [rawOut, setRawOut] = useState<NormalizedItinerary[]>([])
   const [rawReturn, setRawReturn] = useState<NormalizedItinerary[]>([])
@@ -211,6 +256,120 @@ export default function App() {
     outbound: SerpSearchDebugBundle | null
     return: SerpSearchDebugBundle | null
   }>({ outbound: null, return: null })
+
+  // ── SerpApi usage ────────────────────────────────────────────────────────────
+  const { state: serpUsageState, refresh: refreshSerpUsage } = useSerpApiUsage(
+    settings.apiKey,
+    searchRefreshKey,
+  )
+
+  // ── Config presets (filters + dates unified) ────────────────────────────────
+  const configPresets = useConfigPresets()
+
+  const currentFilterSnapshot = useMemo((): FilterSnapshot => ({
+    airlineExcludedCodes: [...airlineExcludedCodes],
+    outStopsMin,
+    outStopsMax,
+    retStopsMin,
+    retStopsMax,
+    outHours,
+    retHours,
+    outPrice,
+    retPrice,
+    outTimeRange,
+    retTimeRange,
+    outLegDurationMatch,
+    retLegDurationMatch,
+    timeBucketsOut: [...timeBucketsOut],
+    timeBucketsRet: [...timeBucketsRet],
+    layoverRegionOn,
+    layoverAirportOff: [...layoverAirportOff],
+    layoverGeoFilterActive,
+    excludeTechnical,
+    showOpenJaw,
+    uniqueRoutesOnly,
+    returnCustomFilters,
+    aircraftSelectedCodes,
+    aircraftMatchMode,
+    sortOut,
+    sortReturn,
+  }), [
+    airlineExcludedCodes, outStopsMin, outStopsMax, retStopsMin, retStopsMax,
+    outHours, retHours, outPrice, retPrice, outTimeRange, retTimeRange,
+    outLegDurationMatch, retLegDurationMatch, timeBucketsOut, timeBucketsRet,
+    layoverRegionOn, layoverAirportOff, layoverGeoFilterActive,
+    excludeTechnical, showOpenJaw, uniqueRoutesOnly, returnCustomFilters,
+    aircraftSelectedCodes, aircraftMatchMode, sortOut, sortReturn,
+  ])
+
+  const currentDateSnapshot = useMemo((): DateSnapshot => ({
+    tripType,
+    outboundDate,
+    outboundEnd,
+    returnDate,
+    returnEnd,
+  }), [tripType, outboundDate, outboundEnd, returnDate, returnEnd])
+
+  const currentConfigSnapshot = useMemo((): ConfigSnapshot => ({
+    ...currentFilterSnapshot,
+    ...currentDateSnapshot,
+  }), [currentFilterSnapshot, currentDateSnapshot])
+
+  /** Apply the filter portion of a config snapshot. */
+  const applyFilterPreset = useCallback((f: FilterSnapshot) => {
+    setAirlineExcludedCodes(new Set(f.airlineExcludedCodes))
+    setOutStopsMin(f.outStopsMin)
+    setOutStopsMax(f.outStopsMax)
+    setRetStopsMin(f.retStopsMin)
+    setRetStopsMax(f.retStopsMax)
+    setOutHours({ ...f.outHours })
+    setRetHours({ ...f.retHours })
+    setOutPrice({ ...f.outPrice })
+    setRetPrice({ ...f.retPrice })
+    setOutTimeRange({ ...f.outTimeRange })
+    setRetTimeRange({ ...f.retTimeRange })
+    setOutLegDurationMatch(f.outLegDurationMatch)
+    setRetLegDurationMatch(f.retLegDurationMatch)
+    setTimeBucketsOut(new Set(f.timeBucketsOut))
+    setTimeBucketsRet(new Set(f.timeBucketsRet))
+    setLayoverRegionOn({ ...f.layoverRegionOn })
+    setLayoverAirportOff(new Set(f.layoverAirportOff))
+    setLayoverGeoFilterActive(f.layoverGeoFilterActive)
+    setExcludeTechnical(f.excludeTechnical)
+    setShowOpenJaw(f.showOpenJaw)
+    setUniqueRoutesOnly(f.uniqueRoutesOnly)
+    setReturnCustomFilters(f.returnCustomFilters)
+    setAircraftSelectedCodes(f.aircraftSelectedCodes)
+    setAircraftMatchMode(f.aircraftMatchMode)
+    setSortOut(f.sortOut)
+    setSortReturn(f.sortReturn)
+  }, [])
+
+  /** Apply the date portion of a config snapshot. */
+  const applyDatePreset = useCallback((d: DateSnapshot) => {
+    setTripType(d.tripType)
+    setOutboundDate(d.outboundDate)
+    setOutboundEnd((d.outboundEnd as string | undefined) ?? d.outboundDate)
+    setReturnDate(d.returnDate)
+    setReturnEnd((d.returnEnd as string | undefined) ?? d.returnDate)
+  }, [])
+
+  /** Apply both filter + date portions of a unified config preset. */
+  const applyConfigPreset = useCallback((c: ConfigSnapshot) => {
+    applyFilterPreset(c)
+    applyDatePreset(c)
+  }, [applyFilterPreset, applyDatePreset])
+
+  // Apply default config preset once on mount
+  const defaultAppliedRef = useRef(false)
+  useEffect(() => {
+    if (defaultAppliedRef.current) return
+    defaultAppliedRef.current = true
+    if (configPresets.defaultPreset) {
+      applyConfigPreset(configPresets.defaultPreset.config)
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const tzByIata = useMemo(() => {
     const m = new Map<string, string>()
@@ -648,14 +807,103 @@ export default function App() {
     retTakeoffLandingBounds,
   ])
 
+  // Price window: rebuild heatmap from filtered raw itineraries so left-panel filters apply
+  const pwOutResultFiltered = useMemo(() => {
+    if (!pwRawOutPerDate.length) return null
+    const filtered = pwRawOutPerDate.map(({ date, itineraries }) => ({
+      date,
+      itineraries: itineraries.filter(
+        (it) =>
+          passesItineraryFilters(it, filterOut) &&
+          passesAirlineResultFilter(it, airlineExcludedCodes) &&
+          passesAircraftFilter(it, aircraftFilterSet, aircraftMatchMode) &&
+          passesTimeBucketFilter(it, timeBucketsOut, tzByIata) &&
+          passesTakeoffTimeRange(
+            it,
+            outTakeoffLandingBounds.takeoffMin,
+            outTakeoffLandingBounds.takeoffMax,
+            tzByIata,
+          ) &&
+          passesLandingTimeRange(
+            it,
+            outTakeoffLandingBounds.landingMin,
+            outTakeoffLandingBounds.landingMax,
+            tzByIata,
+          ),
+      ),
+    }))
+    return buildPriceWindowResult(filtered)
+  }, [
+    pwRawOutPerDate,
+    filterOut,
+    airlineExcludedCodes,
+    aircraftFilterSet,
+    aircraftMatchMode,
+    timeBucketsOut,
+    tzByIata,
+    outTakeoffLandingBounds,
+  ])
+
+  const pwRetResultFiltered = useMemo(() => {
+    if (!pwRawRetPerDate.length) return null
+    const filtered = pwRawRetPerDate.map(({ date, itineraries }) => ({
+      date,
+      itineraries: itineraries.filter(
+        (it) =>
+          passesItineraryFilters(it, filterRet) &&
+          passesAirlineResultFilter(it, airlineExcludedCodes) &&
+          passesAircraftFilter(it, aircraftFilterSet, aircraftMatchMode) &&
+          passesTimeBucketFilter(it, effBucketsRet, tzByIata) &&
+          passesTakeoffTimeRange(
+            it,
+            retTakeoffLandingBounds.takeoffMin,
+            retTakeoffLandingBounds.takeoffMax,
+            tzByIata,
+          ) &&
+          passesLandingTimeRange(
+            it,
+            retTakeoffLandingBounds.landingMin,
+            retTakeoffLandingBounds.landingMax,
+            tzByIata,
+          ),
+      ),
+    }))
+    return buildPriceWindowResult(filtered)
+  }, [
+    pwRawRetPerDate,
+    filterRet,
+    airlineExcludedCodes,
+    aircraftFilterSet,
+    aircraftMatchMode,
+    effBucketsRet,
+    tzByIata,
+    retTakeoffLandingBounds,
+  ])
+
+  // Resolve the user's explicitly selected return cell into an itinerary + date,
+  // so outbound panels can build a precise round-trip Google Flights link.
+  const pwReturnSelResolved = useMemo(() => {
+    if (!pwReturnSel || !pwRetResultFiltered) return null
+    // Use explicitly picked itinerary from the panel, or fall back to bucket's cheapest
+    if (pwReturnSel.selectedItinerary) {
+      return { it: pwReturnSel.selectedItinerary, date: pwReturnSel.date }
+    }
+    const bucket = pwRetResultFiltered.perRouteByDate.get(pwReturnSel.routeKey)?.get(pwReturnSel.date)
+    return bucket ? { it: bucket.bestItinerary, date: pwReturnSel.date } : null
+  }, [pwReturnSel, pwRetResultFiltered])
+
   const outboundInsightStats = useMemo(() => itineraryInsightStats(displayOut), [displayOut])
 
+  const savedRoundTrips = useMemo(
+    () => savedResults.filter((r) => r.leg === 'roundtrip'),
+    [savedResults],
+  )
   const savedOutboundItins = useMemo(
-    () => savedResults.filter((r) => r.leg === 'outbound').map((r) => r.payload.itinerary),
+    () => savedResults.filter((r) => r.leg === 'outbound').map((r) => (r.payload as SavedResultPayloadV1).itinerary),
     [savedResults],
   )
   const savedReturnItins = useMemo(
-    () => savedResults.filter((r) => r.leg === 'return').map((r) => r.payload.itinerary),
+    () => savedResults.filter((r) => r.leg === 'return').map((r) => (r.payload as SavedResultPayloadV1).itinerary),
     [savedResults],
   )
   const savedOutboundGfMap = useMemo(() => {
@@ -665,7 +913,7 @@ export default function App() {
     >()
     for (const r of savedResults) {
       if (r.leg !== 'outbound') continue
-      const p = r.payload
+      const p = r.payload as SavedResultPayloadV1
       m.set(r.scheduleKey, {
         gfOrigins: p.gfOrigins,
         gfDestinations: p.gfDestinations,
@@ -682,7 +930,7 @@ export default function App() {
     >()
     for (const r of savedResults) {
       if (r.leg !== 'return') continue
-      const p = r.payload
+      const p = r.payload as SavedResultPayloadV1
       m.set(r.scheduleKey, {
         gfOrigins: p.gfOrigins,
         gfDestinations: p.gfDestinations,
@@ -702,7 +950,7 @@ export default function App() {
   )
   const savedOutboundTripType = useMemo(
     () =>
-      savedResults.some((r) => r.leg === 'outbound' && r.payload.tripType === 'round') ? 'round' : 'oneway',
+      savedResults.some((r) => r.leg === 'outbound' && (r.payload as SavedResultPayloadV1).tripType === 'round') ? 'round' : 'oneway',
     [savedResults],
   )
   const savedOutPaginationKey = useMemo(
@@ -757,12 +1005,13 @@ export default function App() {
     setOutTimeRange({ ...EMPTY_TIME_RANGE })
     setRetTimeRange({ ...EMPTY_TIME_RANGE })
 
-    const flex = Math.min(14, Math.max(0, flexDays))
+    const { centerDate: outCenter, flexDays: outFlex } = dateRangeToCenterFlex(outboundDate, outboundEnd)
+    const { centerDate: retCenter, flexDays: retFlex } = dateRangeToCenterFlex(returnDate, returnEnd)
 
     const baseInput: Omit<SearchFlightInput, 'centerDate' | 'maxSegments'> = {
       origins,
       destinations,
-      flexDays: flex,
+      flexDays: outFlex,
       perDateLimit: MERGE_PER_DATE_LIMIT,
       mockMode: settings.mockMode,
       apiKey: settings.apiKey,
@@ -782,8 +1031,8 @@ export default function App() {
         direction: 'outbound' as const,
         origins,
         destinations,
-        centerDate: outboundDate,
-        flexDays: flex,
+        centerDate: outCenter,
+        flexDays: outFlex,
         maxSegments: API_MAX_SEGMENTS,
         mockMode: settings.mockMode,
         ...hashExtras,
@@ -800,6 +1049,19 @@ export default function App() {
         }
         out = await loadCached(outParts)
         if (!out?.length) {
+          // Fallback: try per-date cache rows (written by Price Window searches)
+          const window = dateWindow(outParts.centerDate, outParts.flexDays)
+          const perDateFallback: NormalizedItinerary[][] = []
+          for (const date of window) {
+            const cached = await loadCached({ ...outParts, centerDate: date, flexDays: 0 })
+            if (cached?.length) perDateFallback.push(cached)
+          }
+          if (perDateFallback.length > 0) {
+            out = mergePerDateUnique(perDateFallback, MERGE_PER_DATE_LIMIT, sortOut)
+            setCacheHint('Outbound loaded from price window per-date cache.')
+          }
+        }
+        if (!out?.length) {
           setRawOut([])
           setRawReturn([])
           setError(
@@ -809,7 +1071,7 @@ export default function App() {
         }
       } else {
         const outRes = await searchDirection(
-          { ...baseInput, centerDate: outboundDate, maxSegments: API_MAX_SEGMENTS },
+          { ...baseInput, centerDate: outCenter, maxSegments: API_MAX_SEGMENTS },
           'outbound',
           {
             primaryDestination,
@@ -822,7 +1084,14 @@ export default function App() {
         out = outRes.itineraries
         serpDebugOutbound = outRes.serpDebug
         setSerpCapture({ outbound: outRes.serpDebug, return: null })
-        if (!settings.mockMode) void persistSearch(outParts, outRes.itineraries, tzByIata)
+        if (!settings.mockMode) {
+          // Persist merged discovery row (discovery DB-load key)
+          void persistSearch(outParts, outRes.itineraries, tzByIata)
+          // Also persist per-date rows so Price Window DB-load can read them
+          for (const { date, itineraries } of outRes.perDate) {
+            void persistSearch({ ...outParts, centerDate: date, flexDays: 0 }, itineraries, tzByIata)
+          }
+        }
       }
       setRawOut(out)
 
@@ -835,8 +1104,8 @@ export default function App() {
           direction: 'return' as const,
           origins: destinations,
           destinations: origins,
-          centerDate: returnDate,
-          flexDays: flex,
+          centerDate: retCenter,
+          flexDays: retFlex,
           maxSegments: API_MAX_SEGMENTS,
           mockMode: settings.mockMode,
           ...hashExtras,
@@ -844,6 +1113,21 @@ export default function App() {
         let ret: NormalizedItinerary[] | null = null
         if (searchSource === 'db') {
           ret = await loadCached(retParts)
+          if (!ret?.length) {
+            // Fallback: try per-date cache rows (written by Price Window searches)
+            const window = dateWindow(retParts.centerDate, retParts.flexDays)
+            const perDateFallback: NormalizedItinerary[][] = []
+            for (const date of window) {
+              const cached = await loadCached({ ...retParts, centerDate: date, flexDays: 0 })
+              if (cached?.length) perDateFallback.push(cached)
+            }
+            if (perDateFallback.length > 0) {
+              ret = mergePerDateUnique(perDateFallback, MERGE_PER_DATE_LIMIT, sortReturn)
+              setCacheHint((prev) =>
+                prev ? `${prev} Return loaded from price window per-date cache.` : 'Return loaded from price window per-date cache.',
+              )
+            }
+          }
           if (!ret?.length) {
             setError(
               'No cached return snapshot for this search. Run Search API once for the same return route and dates.',
@@ -857,7 +1141,8 @@ export default function App() {
               ...baseInput,
               origins: destinations,
               destinations: origins,
-              centerDate: returnDate,
+              centerDate: retCenter,
+              flexDays: retFlex,
               maxSegments: API_MAX_SEGMENTS,
               maxTotalHours: emptyToNull(effRetHours.maxTotal),
             },
@@ -873,7 +1158,14 @@ export default function App() {
           ret = retRes.itineraries
           serpDebugReturn = retRes.serpDebug
           setSerpCapture((prev) => ({ ...prev, return: retRes.serpDebug }))
-          if (!settings.mockMode) void persistSearch(retParts, retRes.itineraries, tzByIata)
+          if (!settings.mockMode) {
+            // Persist merged discovery row (discovery DB-load key)
+            void persistSearch(retParts, retRes.itineraries, tzByIata)
+            // Also persist per-date rows so Price Window DB-load can read them
+            for (const { date, itineraries } of retRes.perDate) {
+              void persistSearch({ ...retParts, centerDate: date, flexDays: 0 }, itineraries, tzByIata)
+            }
+          }
         }
         returnList = ret ?? []
         setRawReturn(returnList)
@@ -887,9 +1179,11 @@ export default function App() {
           origins: [...origins],
           destinations: [...destinations],
           tripType,
+          searchGoal: 'discovery',
           outboundDate,
+          outboundEnd,
           returnDate,
-          flexDays: flex,
+          returnEnd,
           searchSource,
           mockMode: settings.mockMode,
           deepSearch: settings.deepSearch,
@@ -909,8 +1203,9 @@ export default function App() {
             origins,
             destinations,
             outboundDate,
+            outboundEnd,
             returnDate: tripType === 'round' ? returnDate : null,
-            flexDays: flex,
+            returnEnd: tripType === 'round' ? returnEnd : null,
             deepSearch: settings.deepSearch,
             showHidden: settings.showHidden,
             gl: settings.gl,
@@ -924,6 +1219,7 @@ export default function App() {
       setError(e instanceof Error ? e.message : 'Search failed')
     } finally {
       setLoading(false)
+      if (!settings.mockMode) setSearchRefreshKey((k) => k + 1)
     }
   }, [
     settings,
@@ -931,8 +1227,9 @@ export default function App() {
     destinations,
     tripType,
     outboundDate,
+    outboundEnd,
     returnDate,
-    flexDays,
+    returnEnd,
     primaryDestination,
     multipleDestinations,
     sortOut,
@@ -948,15 +1245,230 @@ export default function App() {
     recordSearchHistory,
   ])
 
+  const runPriceWindowSearch = useCallback(async () => {
+    setError(null)
+    setCacheHint(null)
+
+    if (searchSource === 'api' && !settings.mockMode && !settings.apiKey.trim()) {
+      setError('Add your SerpApi key in Settings or enable mock mode.')
+      return
+    }
+    if (!origins.length || !destinations.length) {
+      setError('Select at least one origin and one destination airport.')
+      return
+    }
+    if (outboundDate > outboundEnd) {
+      setError('Outbound window: start date must be before end date.')
+      return
+    }
+    if (tripType === 'round' && returnDate > returnEnd) {
+      setError('Return window: start date must be before end date.')
+      return
+    }
+    if (searchSource === 'db' && settings.mockMode) {
+      setError('Mock mode has no SQLite cache. Use Search API or disable mock mode in Settings.')
+      return
+    }
+
+    setHasSearched(true)
+    setLoading(true)
+    setSerpCapture({ outbound: null, return: null })
+    setPwOutResult(null)
+    setPwRetResult(null)
+    setPwOutboundSel(null)
+    setPwReturnSel(null)
+    setPwRawOutPerDate([])
+    setPwRawRetPerDate([])
+    setRawOut([])
+    setRawReturn([])
+
+    /** Build HashParts for a single price-window date (flexDays=0). */
+    function pwHashParts(dir: 'outbound' | 'return', origs: string[], dests: string[], date: string) {
+      return {
+        direction: dir,
+        origins: origs,
+        destinations: dests,
+        centerDate: date,
+        flexDays: 0,
+        maxSegments: API_MAX_SEGMENTS,
+        mockMode: settings.mockMode,
+        ...hashExtras,
+      } as const
+    }
+
+    try {
+      // ── Database mode: load each date from SQLite cache ──────────────────
+      if (searchSource === 'db') {
+        const outDates = pwDateRange(outboundDate, outboundEnd)
+        const outPerDate: PriceWindowPerDateEntry[] = []
+        for (const date of outDates) {
+          const cached = await loadCached(pwHashParts('outbound', origins, destinations, date))
+          outPerDate.push({ date, itineraries: cached ?? [] })
+        }
+        if (!outPerDate.some((d) => d.itineraries.length > 0)) {
+          setError('No cached price window data for outbound. Run Search API once with the same route and date window.')
+          return
+        }
+        setPwRawOutPerDate(outPerDate)
+        setPwOutResult(buildPriceWindowResult(outPerDate))
+        setRawOut(outPerDate.flatMap((d) => d.itineraries))
+        setCacheHint('Price window loaded from cache.')
+
+        if (tripType === 'round') {
+          const retDates = pwDateRange(returnDate, returnEnd)
+          const retPerDate: PriceWindowPerDateEntry[] = []
+          for (const date of retDates) {
+            const cached = await loadCached(pwHashParts('return', destinations, origins, date))
+            retPerDate.push({ date, itineraries: cached ?? [] })
+          }
+          if (!retPerDate.some((d) => d.itineraries.length > 0)) {
+            setError('No cached price window data for return leg.')
+            return
+          }
+          setPwRawRetPerDate(retPerDate)
+          setPwRetResult(buildPriceWindowResult(retPerDate))
+          setRawReturn(retPerDate.flatMap((d) => d.itineraries))
+        }
+        return
+      }
+
+      // ── API mode ──────────────────────────────────────────────────────────
+      const baseInput: PriceWindowSearchInput = {
+        origins,
+        destinations,
+        startDate: outboundDate,
+        endDate: outboundEnd,
+        maxSegments: API_MAX_SEGMENTS,
+        mockMode: settings.mockMode,
+        apiKey: settings.apiKey,
+        maxTotalHours: emptyToNull(outHours.maxTotal),
+        showHidden: settings.showHidden,
+        deepSearch: settings.deepSearch,
+        gl: settings.gl,
+        hl: settings.hl,
+        currency: settings.currency,
+      }
+
+      const outRes = await searchPriceWindow(baseInput, 'outbound', {
+        primaryDestination,
+        multipleDestinations,
+        roundTrip: tripType === 'round',
+        excludedAirports: PIPELINE_EXCLUDED_NONE,
+      })
+      setPwRawOutPerDate(outRes.perDate)
+      setPwOutResult(buildPriceWindowResult(outRes.perDate))
+      setRawOut(outRes.perDate.flatMap((d) => d.itineraries))
+      setSerpCapture({ outbound: outRes.serpDebug, return: null })
+
+      if (!settings.mockMode) {
+        for (const { date, itineraries } of outRes.perDate) {
+          void persistSearch(pwHashParts('outbound', origins, destinations, date), itineraries, tzByIata)
+        }
+      }
+
+      let pwRetCount = 0
+      if (tripType === 'round') {
+        const retInput: PriceWindowSearchInput = {
+          origins: destinations,
+          destinations: origins,
+          startDate: returnDate,
+          endDate: returnEnd,
+          maxSegments: API_MAX_SEGMENTS,
+          mockMode: settings.mockMode,
+          apiKey: settings.apiKey,
+          maxTotalHours: emptyToNull(effRetHours.maxTotal),
+          showHidden: settings.showHidden,
+          deepSearch: settings.deepSearch,
+          gl: settings.gl,
+          hl: settings.hl,
+          currency: settings.currency,
+        }
+        const retRes = await searchPriceWindow(retInput, 'return', {
+          primaryDestination,
+          multipleDestinations,
+          roundTrip: true,
+          excludedAirports: PIPELINE_EXCLUDED_NONE,
+        })
+        setPwRawRetPerDate(retRes.perDate)
+        setPwRetResult(buildPriceWindowResult(retRes.perDate))
+        setRawReturn(retRes.perDate.flatMap((d) => d.itineraries))
+        setSerpCapture((prev) => ({ ...prev, return: retRes.serpDebug }))
+        pwRetCount = retRes.perDate.reduce((s, d) => s + d.itineraries.length, 0)
+
+        if (!settings.mockMode) {
+          for (const { date, itineraries } of retRes.perDate) {
+            void persistSearch(pwHashParts('return', destinations, origins, date), itineraries, tzByIata)
+          }
+        }
+      }
+
+      const pwOutCount = outRes.perDate.reduce((s, d) => s + d.itineraries.length, 0)
+      if (pwOutCount > 0 || pwRetCount > 0) {
+        const snapshot: SearchHistorySnapshotV1 = {
+          v: 1,
+          origins: [...origins],
+          destinations: [...destinations],
+          tripType,
+          searchGoal: 'priceWindow',
+          outboundDate,
+          outboundEnd,
+          returnDate,
+          returnEnd,
+          searchSource,
+          mockMode: settings.mockMode,
+          deepSearch: settings.deepSearch,
+          showHidden: settings.showHidden,
+          gl: settings.gl,
+          hl: settings.hl,
+          currency: settings.currency,
+        }
+        void recordSearchHistory(snapshot, pwOutCount, pwRetCount)
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Search failed')
+    } finally {
+      setLoading(false)
+      if (!settings.mockMode) setSearchRefreshKey((k) => k + 1)
+    }
+  }, [
+    settings,
+    origins,
+    destinations,
+    tripType,
+    outboundDate,
+    outboundEnd,
+    returnDate,
+    returnEnd,
+    primaryDestination,
+    multipleDestinations,
+    outHours,
+    effRetHours,
+    searchSource,
+    persistSearch,
+    loadCached,
+    tzByIata,
+    hashExtras,
+    recordSearchHistory,
+  ])
+
   const applySearchHistory = useCallback(
     async (row: SearchHistoryRow) => {
       const s = row.snapshot
       setOrigins(s.origins)
       setDestinations(s.destinations)
       setTripType(s.tripType)
-      setOutboundDate(s.outboundDate)
-      setReturnDate(s.returnDate)
-      setFlexDays(s.flexDays)
+      const goal = s.searchGoal ?? 'discovery'
+      setSearchGoal(goal)
+      // For old price-window history entries that stored separate pw* fields,
+      // migrate them into the shared outbound/return date fields.
+      const outStart = goal === 'priceWindow' && s.pwOutStart ? s.pwOutStart : s.outboundDate
+      const outEnd = goal === 'priceWindow' && s.pwOutEnd ? s.pwOutEnd : (s.outboundEnd ?? addDaysIso(s.outboundDate, s.flexDays ?? 0))
+      const retStart = goal === 'priceWindow' && s.pwRetStart ? s.pwRetStart : s.returnDate
+      const retEnd = goal === 'priceWindow' && s.pwRetEnd ? s.pwRetEnd : (s.returnEnd ?? addDaysIso(s.returnDate, s.flexDays ?? 0))
+      setOutboundDate(outStart)
+      setOutboundEnd(outEnd)
+      setReturnDate(retStart)
+      setReturnEnd(retEnd)
       setSearchSource(s.searchSource)
       update({
         mockMode: s.mockMode,
@@ -976,12 +1488,30 @@ export default function App() {
       setMapHubFilter(new Set())
       setMapRouteFilter(null)
       setMapSoloFocus(null)
-      setHasSearched(true)
+      setPwOutResult(null)
+      setPwRetResult(null)
+      setPwOutboundSel(null)
+      setPwReturnSel(null)
+      setPwRawOutPerDate([])
+      setPwRawRetPerDate([])
       setError(null)
       setCacheHint(null)
       setSerpCapture({ outbound: null, return: null })
 
-      const flex = Math.min(14, Math.max(0, s.flexDays))
+      if (goal === 'priceWindow') {
+        setRawOut([])
+        setRawReturn([])
+        setHasSearched(false)
+        setCacheHint('Price window search loaded. Click Search to run it again.')
+        return
+      }
+
+      setHasSearched(true)
+
+      const sOutEnd = s.outboundEnd ?? addDaysIso(s.outboundDate, s.flexDays ?? 0)
+      const sRetEnd = s.returnEnd ?? addDaysIso(s.returnDate, s.flexDays ?? 0)
+      const { centerDate: sOutCenter, flexDays: sOutFlex } = dateRangeToCenterFlex(s.outboundDate, sOutEnd)
+      const { centerDate: sRetCenter, flexDays: sRetFlex } = dateRangeToCenterFlex(s.returnDate, sRetEnd)
       const hashRow = {
         deepSearch: s.deepSearch,
         showHidden: s.showHidden,
@@ -993,8 +1523,8 @@ export default function App() {
         direction: 'outbound' as const,
         origins: s.origins,
         destinations: s.destinations,
-        centerDate: s.outboundDate,
-        flexDays: flex,
+        centerDate: sOutCenter,
+        flexDays: sOutFlex,
         maxSegments: API_MAX_SEGMENTS,
         mockMode: s.mockMode,
         ...hashRow,
@@ -1027,8 +1557,8 @@ export default function App() {
         direction: 'return' as const,
         origins: s.destinations,
         destinations: s.origins,
-        centerDate: s.returnDate,
-        flexDays: flex,
+        centerDate: sRetCenter,
+        flexDays: sRetFlex,
         maxSegments: API_MAX_SEGMENTS,
         mockMode: s.mockMode,
         ...hashRow,
@@ -1050,8 +1580,9 @@ export default function App() {
     setDestinations([...p.destinations])
     setTripType(p.tripType)
     setOutboundDate(p.outboundDate)
+    setOutboundEnd(p.outboundEnd ?? addDaysIso(p.outboundDate, p.flexDays ?? 0))
     setReturnDate(p.returnDate)
-    setFlexDays(Math.min(14, Math.max(0, p.flexDays)))
+    setReturnEnd(p.returnEnd ?? addDaysIso(p.returnDate, p.flexDays ?? 0))
     setReturnCustomFilters(p.returnCustomFilters)
     setOutHours({ ...p.outHours })
     setRetHours({ ...p.retHours })
@@ -1113,8 +1644,9 @@ export default function App() {
       destinations: [...destinations],
       tripType,
       outboundDate,
+      outboundEnd,
       returnDate,
-      flexDays,
+      returnEnd,
       returnCustomFilters,
       outHours: { ...outHours },
       retHours: { ...retHours },
@@ -1211,6 +1743,44 @@ export default function App() {
       void saveSavedResult('return', itineraryScheduleKey(it), payload)
     },
     [origins, destinations, returnDate, saveSavedResult],
+  )
+
+  /** Save outbound (+ optional return) picked from the Price Window to Saved Results. */
+  const savePriceWindowSelection = useCallback(
+    (
+      outIt: NormalizedItinerary,
+      outDate: string,
+      retIt: NormalizedItinerary | null,
+      retDate: string | null,
+    ) => {
+      if (retIt && retDate) {
+        // Round-trip: save both legs together as a single V2 row
+        const payload: SavedResultPayloadV2 = {
+          v: 2,
+          outboundItinerary: outIt,
+          returnItinerary: retIt,
+          gfOrigins: [...origins],
+          gfDestinations: [...destinations],
+          outboundDate: outDate,
+          returnDate: retDate,
+        }
+        const schedKey = `${itineraryScheduleKey(outIt)}+${itineraryScheduleKey(retIt)}`
+        void saveSavedResult('roundtrip', schedKey, payload)
+      } else {
+        // One-way: save outbound leg only as V1
+        const payload: SavedResultPayloadV1 = {
+          v: 1,
+          itinerary: outIt,
+          gfOrigins: [...origins],
+          gfDestinations: [...destinations],
+          linkDate: outDate,
+          returnDate: null,
+          tripType: 'oneway',
+        }
+        void saveSavedResult('outbound', itineraryScheduleKey(outIt), payload)
+      }
+    },
+    [origins, destinations, saveSavedResult],
   )
 
   const onToggleResultAirline = useCallback((code: string, allowed: boolean) => {
@@ -1365,6 +1935,14 @@ export default function App() {
             </button>
           </nav>
         </div>
+        <SerpApiUsageChip
+          apiKey={settings.apiKey}
+          status={serpUsageState.status}
+          data={serpUsageState.status === 'ok' ? serpUsageState.data : undefined}
+          fetchedAt={serpUsageState.status === 'ok' ? serpUsageState.fetchedAt : undefined}
+          errorMessage={serpUsageState.status === 'error' ? serpUsageState.message : undefined}
+          onRefresh={() => void refreshSerpUsage()}
+        />
         <button type="button" className="btn btn-secondary" onClick={() => setSettingsOpen(true)}>
           Settings
         </button>
@@ -1387,12 +1965,103 @@ export default function App() {
           onToggleSearchPanel={() => setSearchPanelOpen((o) => !o)}
           history={searchHistory}
           onApplyHistory={(row) => void applySearchHistory(row)}
+          loading={loading}
         />
 
-        <div className="layout">
+        <div className={`layout${!searchPanelOpen ? ' layout--panel-hidden' : ''}`}>
+          {!searchPanelOpen && (
+            <button
+              type="button"
+              className="btn btn-secondary btn-tiny search-panel-show-btn"
+              onClick={() => setSearchPanelOpen(true)}
+              title="Show search panel"
+            >
+              ☰ Search
+            </button>
+          )}
           <div className={searchPanelOpen ? 'search-panel-animated' : 'search-panel-animated search-panel-collapsed'}>
         <section className="panel search-panel panel-compact">
-          <h2 className="h2">Search</h2>
+          <div className="search-panel-header">
+            <h2 className="h2">Search</h2>
+            <button
+              type="button"
+              className="btn btn-ghost btn-tiny search-panel-hide-btn"
+              onClick={() => setSearchPanelOpen(false)}
+              title="Hide search panel"
+            >
+              ✕ Hide
+            </button>
+          </div>
+
+          {/* ── Top action bar: always visible, no scrolling needed ── */}
+          <div className="search-top-bar">
+            <fieldset className="field-tight fieldset-inline search-top-bar-source">
+              <legend className="label">Goal</legend>
+              <label className="check check-inline">
+                <input
+                  type="radio"
+                  name="searchGoal"
+                  checked={searchGoal === 'discovery'}
+                  onChange={() => setSearchGoal('discovery')}
+                />
+                Discovery
+              </label>
+              <label className="check check-inline">
+                <input
+                  type="radio"
+                  name="searchGoal"
+                  checked={searchGoal === 'priceWindow'}
+                  onChange={() => setSearchGoal('priceWindow')}
+                />
+                Price window
+              </label>
+            </fieldset>
+            <fieldset className="field-tight fieldset-inline search-top-bar-source">
+              <legend className="label">Source</legend>
+              <label className="check check-inline">
+                <input
+                  type="radio"
+                  name="searchSrcTop"
+                  checked={searchSource === 'api'}
+                  onChange={() => setSearchSource('api')}
+                />
+                API
+              </label>
+              <label className="check check-inline">
+                <input
+                  type="radio"
+                  name="searchSrcTop"
+                  checked={searchSource === 'db'}
+                  onChange={() => setSearchSource('db')}
+                />
+                Database
+              </label>
+            </fieldset>
+            <button
+              type="button"
+              className="btn btn-primary btn-search"
+              disabled={loading}
+              onClick={() => searchGoal === 'priceWindow' ? void runPriceWindowSearch() : void runSearch()}
+            >
+              {loading ? 'Searching…' : 'Search'}
+            </button>
+            {settings.mockMode && <span className="muted tiny">Mock</span>}
+            {cacheHint && <span className="muted tiny search-top-bar-hint">{cacheHint}</span>}
+            {error && <span className="error-inline">{error}</span>}
+          </div>
+
+          {/* ── Config presets (filters + dates unified) ── */}
+          <ConfigPresetsBar
+            presets={configPresets.presets}
+            currentConfig={currentConfigSnapshot}
+            onApply={applyConfigPreset}
+            onSave={configPresets.savePreset}
+            onUpdate={configPresets.updatePreset}
+            onRename={configPresets.renamePreset}
+            onDelete={configPresets.deletePreset}
+            onSetDefault={configPresets.setDefault}
+            onClearDefault={configPresets.clearDefault}
+          />
 
           <details className="search-section" open>
             <summary className="search-section-summary">Route and dates</summary>
@@ -1440,21 +2109,26 @@ export default function App() {
 
               <div className="grid-2 tight-gap">
                 <label className="field-tight">
-                  <span className="label">Outbound date</span>
+                  <span className="label">Outbound from</span>
                   <input className="input" type="date" value={outboundDate} onChange={(e) => setOutboundDate(e.target.value)} />
                 </label>
-                {tripType === 'round' && (
+                <label className="field-tight">
+                  <span className="label">Outbound to</span>
+                  <input className="input" type="date" value={outboundEnd} onChange={(e) => setOutboundEnd(e.target.value)} />
+                </label>
+              </div>
+              {tripType === 'round' && (
+                <div className="grid-2 tight-gap">
                   <label className="field-tight">
-                    <span className="label">Return date</span>
+                    <span className="label">Return from</span>
                     <input className="input" type="date" value={returnDate} onChange={(e) => setReturnDate(e.target.value)} />
                   </label>
-                )}
-              </div>
-
-              <label className="field-tight">
-                <span className="label">Flex ±{flexDays}d</span>
-                <input className="range" type="range" min={0} max={14} value={flexDays} onChange={(e) => setFlexDays(Number(e.target.value))} />
-              </label>
+                  <label className="field-tight">
+                    <span className="label">Return to</span>
+                    <input className="input" type="date" value={returnEnd} onChange={(e) => setReturnEnd(e.target.value)} />
+                  </label>
+                </div>
+              )}
 
               {tripType === 'round' && (
                 <label className="check check-inline field-tight">
@@ -1829,42 +2503,6 @@ export default function App() {
             </div>
           </details>
 
-          <details className="search-section" open>
-            <summary className="search-section-summary">Run search</summary>
-            <div className="search-section-body">
-          <fieldset className="field-tight fieldset-inline">
-            <legend className="label">Search source</legend>
-            <label className="check check-inline">
-              <input
-                type="radio"
-                name="searchSrc"
-                checked={searchSource === 'api'}
-                onChange={() => setSearchSource('api')}
-              />
-              Search API
-            </label>
-            <label className="check check-inline">
-              <input
-                type="radio"
-                name="searchSrc"
-                checked={searchSource === 'db'}
-                onChange={() => setSearchSource('db')}
-              />
-              Search database
-            </label>
-          </fieldset>
-
-          <button
-            type="button"
-            className="btn btn-primary btn-search"
-            disabled={loading}
-            onClick={() => void runSearch()}
-          >
-            {loading ? 'Searching…' : 'Search'}
-          </button>
-
-          {settings.mockMode && <p className="muted tiny">Mock mode on.</p>}
-          {cacheHint && <p className="muted tiny">{cacheHint}</p>}
           {(serpCapture.outbound || serpCapture.return) && (
             <div className="row2 serp-capture-actions">
               <button
@@ -1879,13 +2517,10 @@ export default function App() {
                   downloadJson(`serpapi-capture-${stamp}.json`, payload)
                 }}
               >
-                Download
+                Download SerpApi capture
               </button>
             </div>
           )}
-          {error && <div className="error-banner">{error}</div>}
-            </div>
-          </details>
         </section>
           <div className="search-panel-save-actions">
             <button type="button" className="btn btn-secondary btn-tiny" onClick={handleSaveSearch}>
@@ -1897,8 +2532,58 @@ export default function App() {
           </div>
           </div>
 
+        <ErrorBoundary inline label="Results render error">
         <div className="results-stack">
-          {showRouteMap ? (
+          {searchGoal === 'priceWindow' && (pwOutResultFiltered || pwRetResultFiltered) ? (
+            <div className="pw-panels-stack">
+              {/* Total round-trip panel — shows combined prices; clicking drives the Outbound+Return panels */}
+              {tripType === 'round' && pwOutResultFiltered && pwRetResultFiltered && (
+                <PriceWindowPanel
+                  result={pwOutResultFiltered}
+                  currency={settings.currency}
+                  title="Total round-trip by date"
+                  namesByIata={namesByIata}
+                  returnResult={pwRetResultFiltered}
+                  onRouteSelect={setPwOutboundSel}
+                  controlledSelection={pwOutboundSel}
+                  selectionOnly={true}
+                  selectedReturnIt={pwReturnSelResolved?.it ?? null}
+                  selectedReturnDate={pwReturnSelResolved?.date}
+                  maxPrice={filterOut.maxPrice}
+                  onSave={savePriceWindowSelection}
+                />
+              )}
+              {/* Outbound panel — shows itinerary picker for the currently selected outbound cell */}
+              {pwOutResultFiltered && (
+                <PriceWindowPanel
+                  result={pwOutResultFiltered}
+                  currency={settings.currency}
+                  title="Outbound by date"
+                  namesByIata={namesByIata}
+                  returnResult={null}
+                  onRouteSelect={setPwOutboundSel}
+                  controlledSelection={pwOutboundSel}
+                  selectedReturnIt={pwReturnSelResolved?.it ?? null}
+                  selectedReturnDate={pwReturnSelResolved?.date}
+                  maxPrice={filterOut.maxPrice}
+                  onSave={savePriceWindowSelection}
+                />
+              )}
+              {/* Return panel — shows return prices filtered by selected outbound route */}
+              {tripType === 'round' && pwRetResultFiltered && (
+                <PriceWindowPanel
+                  result={pwRetResultFiltered}
+                  currency={settings.currency}
+                  title="Return by date"
+                  namesByIata={namesByIata}
+                  filterToRouteKey={pwOutboundSel ? reverseRouteKey(pwOutboundSel.routeKey) : null}
+                  onRouteSelect={setPwReturnSel}
+                  controlledSelection={pwReturnSel}
+                  maxPrice={filterRet.maxPrice}
+                />
+              )}
+            </div>
+          ) : searchGoal === 'discovery' && showRouteMap ? (
             <ResultsRouteMap
               items={routeMapItems}
               itemsReturn={routeMapItemsReturn}
@@ -1915,66 +2600,71 @@ export default function App() {
               wrapRef={routeMapWrapRef}
             />
           ) : null}
-          <ResultsList
-            title="Outbound"
-            items={displayOut}
-            sort={sortOut}
-            onSortChange={setSortOut}
-            gfOrigins={origins}
-            gfDestinations={destinations}
-            linkDate={outboundDate}
-            returnDate={tripType === 'round' ? returnDate : null}
-            tripType={tripType}
-            tzByIata={tzByIata}
-            displayTimezone={displayTimezone}
-            airlineDirectory={airlinesDict}
-            airlinesMeta={airlinesMetaJson as AirlinesMeta}
-            namesByIata={namesByIata}
-            layoverLongMinHours={settings.layoverLongMinHours}
-            layoverShortMaxHours={settings.layoverShortMaxHours}
-            priceCurrency={settings.currency}
-            paginationResetKey={outPaginationKey}
-            saveControls={{
-              leg: 'outbound',
-              savedKeys: savedKeysOutbound,
-              onSave: saveOutboundCard,
-              onRemove: (sk) => void removeSavedResult('outbound', sk),
-            }}
-            resultLeg="outbound"
-            mapFocus={{ active: mapSoloFocus, onSet: setMapSoloFocus }}
-          />
-          {tripType === 'round' && (
-            <ResultsList
-              title="Return"
-              items={displayReturn}
-              sort={sortReturn}
-              onSortChange={setSortReturn}
-              gfOrigins={destinations}
-              gfDestinations={origins}
-              linkDate={returnDate}
-              returnDate={null}
-              tripType="round"
-              tzByIata={tzByIata}
-              displayTimezone={displayTimezone}
-              airlineDirectory={airlinesDict}
-              airlinesMeta={airlinesMetaJson as AirlinesMeta}
-              namesByIata={namesByIata}
-              layoverLongMinHours={settings.layoverLongMinHours}
-              layoverShortMaxHours={settings.layoverShortMaxHours}
-              priceCurrency={settings.currency}
-              paginationResetKey={retPaginationKey}
-              saveControls={{
-                leg: 'return',
-                savedKeys: savedKeysReturn,
-                onSave: saveReturnCard,
-                onRemove: (sk) => void removeSavedResult('return', sk),
-              }}
-              resultLeg="return"
-              mapFocus={{ active: mapSoloFocus, onSet: setMapSoloFocus }}
-            />
+          {searchGoal === 'discovery' && (
+            <>
+              <ResultsList
+                title="Outbound"
+                items={displayOut}
+                sort={sortOut}
+                onSortChange={setSortOut}
+                gfOrigins={origins}
+                gfDestinations={destinations}
+                linkDate={outboundDate}
+                returnDate={tripType === 'round' ? returnDate : null}
+                tripType={tripType}
+                tzByIata={tzByIata}
+                displayTimezone={displayTimezone}
+                airlineDirectory={airlinesDict}
+                airlinesMeta={airlinesMetaJson as AirlinesMeta}
+                namesByIata={namesByIata}
+                layoverLongMinHours={settings.layoverLongMinHours}
+                layoverShortMaxHours={settings.layoverShortMaxHours}
+                priceCurrency={settings.currency}
+                paginationResetKey={outPaginationKey}
+                saveControls={{
+                  leg: 'outbound',
+                  savedKeys: savedKeysOutbound,
+                  onSave: saveOutboundCard,
+                  onRemove: (sk) => void removeSavedResult('outbound', sk),
+                }}
+                resultLeg="outbound"
+                mapFocus={{ active: mapSoloFocus, onSet: setMapSoloFocus }}
+              />
+              {tripType === 'round' && (
+                <ResultsList
+                  title="Return"
+                  items={displayReturn}
+                  sort={sortReturn}
+                  onSortChange={setSortReturn}
+                  gfOrigins={destinations}
+                  gfDestinations={origins}
+                  linkDate={returnDate}
+                  returnDate={null}
+                  tripType="round"
+                  tzByIata={tzByIata}
+                  displayTimezone={displayTimezone}
+                  airlineDirectory={airlinesDict}
+                  airlinesMeta={airlinesMetaJson as AirlinesMeta}
+                  namesByIata={namesByIata}
+                  layoverLongMinHours={settings.layoverLongMinHours}
+                  layoverShortMaxHours={settings.layoverShortMaxHours}
+                  priceCurrency={settings.currency}
+                  paginationResetKey={retPaginationKey}
+                  saveControls={{
+                    leg: 'return',
+                    savedKeys: savedKeysReturn,
+                    onSave: saveReturnCard,
+                    onRemove: (sk) => void removeSavedResult('return', sk),
+                  }}
+                  resultLeg="return"
+                  mapFocus={{ active: mapSoloFocus, onSet: setMapSoloFocus }}
+                />
+              )}
+            </>
           )}
 
         </div>
+        </ErrorBoundary>
         </div>
           </>
         ) : mainTab === 'savedSearches' ? (
@@ -1991,10 +2681,11 @@ export default function App() {
           />
         ) : (
           <div className="saved-results-page">
-            <p className="muted small saved-results-intro">
-              Itineraries you save from Search appear here. Outbound and return are stored separately with the correct
-              Google Flights link context.
-            </p>
+            <SavedRoundTripsList
+              items={savedRoundTrips}
+              currency={settings.currency}
+              onRemove={(sk) => void removeSavedResult('roundtrip', sk)}
+            />
             <ResultsList
               title="Saved outbound"
               items={savedOutboundItins}

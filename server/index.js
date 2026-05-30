@@ -63,6 +63,28 @@ app.post('/api/google-flights', async (req, res) => {
   }
 });
 
+app.get('/api/serpapi-account', async (req, res) => {
+  try {
+    const apiKey = typeof req.query.apiKey === 'string' ? req.query.apiKey.trim() : '';
+    if (!apiKey) {
+      res.status(400).json({ error: 'Missing apiKey query param' });
+      return;
+    }
+    const url = `https://serpapi.com/account.json?api_key=${encodeURIComponent(apiKey)}`;
+    const upstream = await fetch(url, { headers: { Accept: 'application/json' } });
+    const text = await upstream.text();
+    let json;
+    try { json = JSON.parse(text); } catch {
+      res.status(502).json({ error: 'Invalid JSON from SerpApi', raw: text.slice(0, 300) });
+      return;
+    }
+    if (!upstream.ok) { res.status(upstream.status).json(json); return; }
+    res.json(json);
+  } catch (e) {
+    res.status(500).json({ error: e instanceof Error ? e.message : 'Proxy error' });
+  }
+});
+
 if (isProd) {
   if (!fs.existsSync(dist)) {
     console.error('dist/ not found. Run npm run build first.');

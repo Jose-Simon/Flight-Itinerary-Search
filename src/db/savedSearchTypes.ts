@@ -16,8 +16,11 @@ export type SavedSearchPayloadV1 = {
   destinations: string[]
   tripType: 'oneway' | 'round'
   outboundDate: string
+  outboundEnd: string
   returnDate: string
-  flexDays: number
+  returnEnd: string
+  /** @deprecated kept for reading old saved searches; use outboundEnd / returnEnd instead */
+  flexDays?: number
   returnCustomFilters: boolean
   outHours: HourFieldStrings
   retHours: HourFieldStrings

@@ -1,7 +1,7 @@
 import type { Database } from 'sql.js'
-import type { SavedResultLeg, SavedResultPayloadV1, SavedResultRow } from './savedResultTypes'
+import type { SavedResultLeg, SavedResultPayload, SavedResultPayloadV1, SavedResultPayloadV2, SavedResultRow } from './savedResultTypes'
 
-export function upsertSavedResult(db: Database, leg: SavedResultLeg, scheduleKey: string, payload: SavedResultPayloadV1) {
+export function upsertSavedResult(db: Database, leg: SavedResultLeg, scheduleKey: string, payload: SavedResultPayload) {
   const json = JSON.stringify(payload)
   db.run(
     `INSERT INTO saved_result (created_at, leg, schedule_key, payload_json) VALUES (?, ?, ?, ?)
@@ -26,18 +26,29 @@ export function listSavedResults(db: Database): SavedResultRow[] {
       payload_json: string
     }
     try {
-      const payload = JSON.parse(o.payload_json) as SavedResultPayloadV1
-      if (payload?.v !== 1 || !payload.itinerary) continue
-      const leg = o.leg === 'return' ? 'return' : 'outbound'
+      const payload = JSON.parse(o.payload_json) as Record<string, unknown>
+      let parsed: SavedResultPayload | null = null
+
+      if (payload?.v === 1 && payload.itinerary) {
+        parsed = payload as unknown as SavedResultPayloadV1
+      } else if (payload?.v === 2 && payload.outboundItinerary && payload.returnItinerary) {
+        parsed = payload as unknown as SavedResultPayloadV2
+      }
+
+      if (!parsed) continue
+
+      const leg: SavedResultLeg =
+        o.leg === 'return' ? 'return' : o.leg === 'roundtrip' ? 'roundtrip' : 'outbound'
+
       out.push({
         id: Number(o.id),
         createdAt: Number(o.created_at),
         leg,
         scheduleKey: String(o.schedule_key),
-        payload,
+        payload: parsed,
       })
     } catch {
-      /* skip */
+      /* skip malformed rows */
     }
   }
   stmt.free()

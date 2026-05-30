@@ -11,10 +11,12 @@ function shortenList(codes: string[], maxBeforePlus: number): string {
 export function savedSearchTitleFromPayload(p: SavedSearchPayloadV1): string {
   const o = shortenList(p.origins, 4)
   const d = shortenList(p.destinations, 4)
-  const dates =
-    p.tripType === 'round' ? `${p.outboundDate} · ${p.returnDate}` : p.outboundDate
+  const fmtRange = (start: string, end: string) => start === end ? start : `${start}–${end}`
+  const outRange = fmtRange(p.outboundDate, p.outboundEnd ?? p.outboundDate)
+  const retRange = fmtRange(p.returnDate, p.returnEnd ?? p.returnDate)
+  const dates = p.tripType === 'round' ? `${outRange} · ${retRange}` : outRange
   const trip = p.tripType === 'round' ? 'Round' : 'One way'
-  return `${o} → ${d} · ${dates} · ${trip} · ±${p.flexDays}d`
+  return `${o} → ${d} · ${dates} · ${trip}`
 }
 
 /** Multi-line parameter summary for the saved card body (muted). */
@@ -24,10 +26,13 @@ export function savedSearchDetailLinesFromPayload(p: SavedSearchPayloadV1): stri
   const d = p.destinations.map((c) => c.trim().toUpperCase()).filter(Boolean).join(', ')
   L.push(`Origins: ${o || '—'}`)
   L.push(`Destinations: ${d || '—'}`)
+  const fmtRange = (start: string, end: string) => start === end ? start : `${start} – ${end}`
+  const outRange = fmtRange(p.outboundDate, p.outboundEnd ?? p.outboundDate)
+  const retRange = fmtRange(p.returnDate, p.returnEnd ?? p.returnDate)
   L.push(
     p.tripType === 'round'
-      ? `Dates: ${p.outboundDate} outbound · ${p.returnDate} return · flex ±${p.flexDays}d`
-      : `Dates: ${p.outboundDate} · flex ±${p.flexDays}d`,
+      ? `Dates: ${outRange} outbound · ${retRange} return`
+      : `Dates: ${outRange}`,
   )
   L.push(
     `Trip: ${p.tripType === 'round' ? 'Round trip' : 'One way'}${p.returnCustomFilters ? ' · separate return filters' : ''} · ${p.searchSource === 'api' ? 'Search API' : 'Search database'}`,

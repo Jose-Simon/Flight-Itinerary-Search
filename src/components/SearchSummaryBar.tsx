@@ -18,6 +18,8 @@ type Props = {
   onToggleSearchPanel: () => void
   history: SearchHistoryRow[]
   onApplyHistory: (row: SearchHistoryRow) => void
+  /** Show indeterminate progress bar while a search is in flight. */
+  loading?: boolean
 }
 
 function formatShortDate(iso: string): string {
@@ -65,6 +67,7 @@ export function SearchSummaryBar({
   onToggleSearchPanel,
   history,
   onApplyHistory,
+  loading = false,
 }: Props) {
   const routeLeft = origins.length ? origins.map((c) => c.trim().toUpperCase()).join('/') : '—'
   const routeRight = destinations.length ? destinations.map((c) => c.trim().toUpperCase()).join('/') : '—'
@@ -75,6 +78,7 @@ export function SearchSummaryBar({
 
   return (
     <div className="search-summary-bar">
+      <div className={`search-progress-bar${loading ? ' search-progress-bar--active' : ''}`} aria-hidden />
       <div className="search-summary-main">
         <div className="search-summary-route-pill" title="Origins → Destinations">
           <span className="search-summary-route-part">{routeLeft}</span>
@@ -124,9 +128,6 @@ export function SearchSummaryBar({
       </div>
 
       <div className="search-summary-actions">
-        <button type="button" className="btn btn-secondary btn-tiny" onClick={onToggleSearchPanel}>
-          {searchPanelOpen ? 'Hide search options' : 'Show search options'}
-        </button>
         {history.length > 0 && (
           <label className="search-summary-history-label">
             <span className="muted tiny">History</span>
@@ -144,7 +145,15 @@ export function SearchSummaryBar({
               <option value="">Open recent…</option>
               {history.map((h) => {
                 const s = h.snapshot
-                const label = `${s.origins.join('/')} → ${s.destinations.join('/')} · ${formatShortDate(s.outboundDate)}`
+                const isPw = s.searchGoal === 'priceWindow'
+                // Old entries may have stored pw* fields separately; new entries use outboundDate/outboundEnd for both modes
+                const dateFrom = (isPw && s.pwOutStart) ? s.pwOutStart : s.outboundDate
+                const dateTo = (isPw && s.pwOutEnd) ? s.pwOutEnd : (s.outboundEnd ?? s.outboundDate)
+                const dateStr = dateTo && dateTo !== dateFrom
+                  ? `${formatShortDate(dateFrom)}–${formatShortDate(dateTo)}`
+                  : formatShortDate(dateFrom)
+                const goalTag = isPw ? '[PW] ' : ''
+                const label = `${goalTag}${s.origins.join('/')} → ${s.destinations.join('/')} · ${dateStr}`
                 return (
                   <option key={h.id} value={h.id}>
                     {label}

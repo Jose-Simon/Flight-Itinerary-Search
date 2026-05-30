@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import type { NormalizedItinerary, NormalizedLayover, NormalizedSegment } from '../lib/types'
-import { buildGoogleFlightsSearchUrl, itineraryDetailsText } from '../lib/googleFlightsLink'
+import { buildGoogleFlightsDeepLink, buildGoogleFlightsSearchUrl, itineraryDetailsText } from '../lib/googleFlightsLink'
 import { itineraryScheduleKey, totalFlightMinutes, type SortMode } from '../lib/filters'
 import {
   calendarDayOffsetFromTripStart,
@@ -518,7 +518,8 @@ function ItineraryActions({
     | undefined
 }) {
   const o = linkOverride ?? { gfOrigins, gfDestinations, linkDate, returnDate }
-  const { url, reliable } = buildGoogleFlightsSearchUrl(o.gfOrigins, o.gfDestinations, o.linkDate, o.returnDate)
+  const deepUrl = buildGoogleFlightsDeepLink(it, o.linkDate)
+  const { url: searchUrl, reliable } = buildGoogleFlightsSearchUrl(o.gfOrigins, o.gfDestinations, o.linkDate, o.returnDate)
   const details = itineraryDetailsText(it, 'Itinerary', o.linkDate)
 
   const copy = async () => {
@@ -527,12 +528,16 @@ function ItineraryActions({
 
   return (
     <>
-      {reliable ? (
-        <a className="itin-action" href={url} target="_blank" rel="noreferrer">
+      {deepUrl ? (
+        <a className="itin-action" href={deepUrl} target="_blank" rel="noreferrer" title="Pre-selected exact flights">
+          Google Flights ✓
+        </a>
+      ) : reliable ? (
+        <a className="itin-action" href={searchUrl} target="_blank" rel="noreferrer">
           Google Flights
         </a>
       ) : (
-        <a className="itin-action" href={url} target="_blank" rel="noreferrer" title="Approximate search">
+        <a className="itin-action" href={searchUrl} target="_blank" rel="noreferrer" title="Approximate search">
           Google Flights (~)
         </a>
       )}

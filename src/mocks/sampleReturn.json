@@ -14,7 +14,8 @@
         }
       ],
       "layovers": [],
-      "total_duration": 510
+      "total_duration": 510,
+      "price": 782
     },
     {
       "flights": [
@@ -38,7 +39,8 @@
         }
       ],
       "layovers": [{ "duration": 135, "name": "Shannon", "id": "SNN" }],
-      "total_duration": 700
+      "total_duration": 700,
+      "price": 934
     }
   ],
   "other_flights": []

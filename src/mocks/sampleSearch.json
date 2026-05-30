@@ -14,7 +14,8 @@
         }
       ],
       "layovers": [],
-      "total_duration": 430
+      "total_duration": 430,
+      "price": 847
     },
     {
       "flights": [
@@ -38,7 +39,8 @@
         }
       ],
       "layovers": [{ "duration": 645, "name": "Dublin Airport", "id": "DUB" }],
-      "total_duration": 1125
+      "total_duration": 1125,
+      "price": 1120
     },
     {
       "flights": [
@@ -62,7 +64,8 @@
         }
       ],
       "layovers": [{ "duration": 55, "name": "Keflavik", "id": "KEF" }],
-      "total_duration": 630
+      "total_duration": 630,
+      "price": 965
     }
   ],
   "other_flights": []

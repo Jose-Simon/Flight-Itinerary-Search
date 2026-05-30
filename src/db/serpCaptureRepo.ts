@@ -8,8 +8,9 @@ export type SerpCaptureStoredRecord = {
   origins: string[]
   destinations: string[]
   outboundDate: string
+  outboundEnd: string
   returnDate: string | null
-  flexDays: number
+  returnEnd: string | null
   deepSearch: boolean
   showHidden: boolean
   gl: string
@@ -43,8 +44,9 @@ export function saveSerpApiCapture(
     origins: summary.origins,
     destinations: summary.destinations,
     outboundDate: summary.outboundDate,
+    outboundEnd: summary.outboundEnd,
     returnDate: summary.returnDate,
-    flexDays: summary.flexDays,
+    returnEnd: summary.returnEnd,
   })
   db.run(
     'INSERT INTO serp_api_capture (created_at, mock_mode, summary_json, payload_json) VALUES (?, ?, ?, ?)',
