@@ -3041,7 +3041,7 @@ button.pw-stat-col--med {
   font-size: 0.78rem;
   font-weight: 700;
   color: var(--accent);
-  background: var(--surface2);
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface2));
 }
 
 .pw-label-hint {
@@ -3092,14 +3092,12 @@ button.pw-stat-col--med {
   letter-spacing: 0.02em;
 }
 
-.pw-grid-global-row .pw-date-col,
-.pw-grid-global-row .pw-stat-col,
-.pw-grid-global-row .pw-label-col {
-  border-bottom: 3px solid var(--border-strong);
-}
-
+/* All-routes row: accent-tinted background to distinguish it from route rows */
+.pw-grid-global-row .pw-label-col,
+.pw-grid-global-row .pw-stat-col:not(.pw-stat-heat),
 .pw-grid-global-row .pw-date-col {
-  background: var(--surface2);
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface2));
+  border-bottom: 3px solid var(--border-strong);
 }
 
 .pw-price-cell {
