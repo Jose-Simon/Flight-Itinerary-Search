@@ -574,10 +574,16 @@ export function PriceWindowPanel({
                     All routes
                     <span className="pw-label-hint">{returnResult ? 'best combined' : 'cheapest any'}</span>
                   </div>
-                  <div className="pw-stat-col pw-stat-col--min pw-stat-sticky pw-stat-global">
+                  <div
+                    className="pw-stat-col pw-stat-col--min pw-stat-sticky pw-stat-global"
+                    style={gMin != null ? { background: heatColor(gMin, minP, maxP), color: '#fff' } : undefined}
+                  >
                     {gMin != null ? formatPriceAmount(gMin, currency) : '—'}
                   </div>
-                  <div className="pw-stat-col pw-stat-col--med pw-stat-sticky pw-stat-global">
+                  <div
+                    className="pw-stat-col pw-stat-col--med pw-stat-sticky pw-stat-global"
+                    style={gMed != null ? { background: heatColor(gMed, minP, maxP), color: '#fff' } : undefined}
+                  >
                     {gMed != null ? formatPriceAmount(gMed, currency) : '—'}
                   </div>
                   {dates.map((d) => {
@@ -615,10 +621,16 @@ export function PriceWindowPanel({
                     <span className="pw-route-path">{path}</span>
                     {carriers && <span className="pw-route-carriers">{carriers}</span>}
                   </div>
-                  <div className={`pw-stat-col pw-stat-col--min pw-stat-sticky${statSort.startsWith('min') ? ' pw-stat-sorted' : ''}`}>
+                  <div
+                    className={`pw-stat-col pw-stat-col--min pw-stat-sticky${statSort.startsWith('min') ? ' pw-stat-sorted' : ''}`}
+                    style={routeMin != null ? { background: heatColor(routeMin, minP, maxP), color: '#fff' } : undefined}
+                  >
                     {routeMin != null ? formatPriceAmount(routeMin, currency) : '—'}
                   </div>
-                  <div className={`pw-stat-col pw-stat-col--med pw-stat-sticky${statSort.startsWith('med') ? ' pw-stat-sorted' : ''}`}>
+                  <div
+                    className={`pw-stat-col pw-stat-col--med pw-stat-sticky${statSort.startsWith('med') ? ' pw-stat-sorted' : ''}`}
+                    style={routeMed != null ? { background: heatColor(routeMed, minP, maxP), color: '#fff' } : undefined}
+                  >
                     {routeMed != null ? formatPriceAmount(routeMed, currency) : '—'}
                   </div>
                   {dates.map((d) => {

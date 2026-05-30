@@ -10,6 +10,7 @@
   --accent-dim: rgba(79, 158, 255, 0.12);
   --danger: #f47174;
   --border: #2a3a52;
+  --border-strong: #4a6080;
   --card-glow: rgba(79, 158, 255, 0.08);
   font-family: 'Segoe UI', system-ui, Roboto, Ubuntu, sans-serif;
   line-height: 1.4;
@@ -23,6 +24,7 @@
     --text: #1a2332;
     --muted: #5c6b7d;
     --border: #d5dde8;
+    --border-strong: #a8bace;
   }
 }
 
@@ -3082,6 +3084,10 @@ button.pw-stat-col--med {
   background: var(--surface2);
   text-transform: uppercase;
   letter-spacing: 0.02em;
+}
+
+.pw-grid-global-row {
+  border-bottom: 2px solid var(--border-strong);
 }
 
 .pw-grid-global-row .pw-date-col {
