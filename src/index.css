@@ -3092,8 +3092,10 @@ button.pw-stat-col--med {
   letter-spacing: 0.02em;
 }
 
-.pw-grid-global-row {
-  border-bottom: 2px solid var(--border-strong);
+.pw-grid-global-row .pw-date-col,
+.pw-grid-global-row .pw-stat-col,
+.pw-grid-global-row .pw-label-col {
+  border-bottom: 3px solid var(--border-strong);
 }
 
 .pw-grid-global-row .pw-date-col {
