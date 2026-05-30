@@ -575,14 +575,14 @@ export function PriceWindowPanel({
                     <span className="pw-label-hint">{returnResult ? 'best combined' : 'cheapest any'}</span>
                   </div>
                   <div
-                    className="pw-stat-col pw-stat-col--min pw-stat-sticky pw-stat-global"
-                    style={gMin != null ? { background: heatColor(gMin, minP, maxP), color: '#fff' } : undefined}
+                    className={`pw-stat-col pw-stat-col--min pw-stat-sticky pw-stat-global${gMin != null ? ' pw-stat-heat' : ''}`}
+                    style={gMin != null ? { '--pw-heat-bg': heatColor(gMin, minP, maxP) } as React.CSSProperties : undefined}
                   >
                     {gMin != null ? formatPriceAmount(gMin, currency) : '—'}
                   </div>
                   <div
-                    className="pw-stat-col pw-stat-col--med pw-stat-sticky pw-stat-global"
-                    style={gMed != null ? { background: heatColor(gMed, minP, maxP), color: '#fff' } : undefined}
+                    className={`pw-stat-col pw-stat-col--med pw-stat-sticky pw-stat-global${gMed != null ? ' pw-stat-heat' : ''}`}
+                    style={gMed != null ? { '--pw-heat-bg': heatColor(gMed, minP, maxP) } as React.CSSProperties : undefined}
                   >
                     {gMed != null ? formatPriceAmount(gMed, currency) : '—'}
                   </div>
@@ -622,14 +622,14 @@ export function PriceWindowPanel({
                     {carriers && <span className="pw-route-carriers">{carriers}</span>}
                   </div>
                   <div
-                    className={`pw-stat-col pw-stat-col--min pw-stat-sticky${statSort.startsWith('min') ? ' pw-stat-sorted' : ''}`}
-                    style={routeMin != null ? { background: heatColor(routeMin, minP, maxP), color: '#fff' } : undefined}
+                    className={`pw-stat-col pw-stat-col--min pw-stat-sticky${routeMin != null ? ' pw-stat-heat' : ''}${statSort.startsWith('min') ? ' pw-stat-sorted' : ''}`}
+                    style={routeMin != null ? { '--pw-heat-bg': heatColor(routeMin, minP, maxP) } as React.CSSProperties : undefined}
                   >
                     {routeMin != null ? formatPriceAmount(routeMin, currency) : '—'}
                   </div>
                   <div
-                    className={`pw-stat-col pw-stat-col--med pw-stat-sticky${statSort.startsWith('med') ? ' pw-stat-sorted' : ''}`}
-                    style={routeMed != null ? { background: heatColor(routeMed, minP, maxP), color: '#fff' } : undefined}
+                    className={`pw-stat-col pw-stat-col--med pw-stat-sticky${routeMed != null ? ' pw-stat-heat' : ''}${statSort.startsWith('med') ? ' pw-stat-sorted' : ''}`}
+                    style={routeMed != null ? { '--pw-heat-bg': heatColor(routeMed, minP, maxP) } as React.CSSProperties : undefined}
                   >
                     {routeMed != null ? formatPriceAmount(routeMed, currency) : '—'}
                   </div>

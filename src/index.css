@@ -2987,6 +2987,12 @@ button.pw-stat-col--med {
   border-right: 2px solid var(--border);
 }
 
+/* Heat-colored stat cell — background driven by --pw-heat-bg CSS variable set inline */
+.pw-stat-col.pw-stat-heat {
+  background: var(--pw-heat-bg) !important;
+  color: #fff !important;
+}
+
 .pw-stat-sortable:hover {
   color: var(--accent);
   background: var(--surface2) !important;
