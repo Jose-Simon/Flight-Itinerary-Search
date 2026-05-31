@@ -230,6 +230,19 @@ export function useFlightDb() {
     schedulePersist(db)
   }, [])
 
+  const downloadDb = useCallback(async () => {
+    const db = await getFlightDb()
+    const bytes = db.export()
+    const blob = new Blob([bytes], { type: 'application/x-sqlite3' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[T:]/g, '-')
+    a.href = url
+    a.download = `flight-cache-${stamp}.sqlite`
+    a.click()
+    setTimeout(() => URL.revokeObjectURL(url), 10_000)
+  }, [])
+
   const resetEntireDb = useCallback(async () => {
     await resetFlightDatabase()
     const db = await getFlightDb()
@@ -284,6 +297,7 @@ export function useFlightDb() {
     loadCached,
     loadCachedByRoute,
     loadCachedSplitFallback,
+    downloadDb,
     resetEntireDb,
     saveSerpApiSearchCapture,
     getSerpCaptureRows,

@@ -158,6 +158,7 @@ export default function App() {
     persistSearch,
     loadCached,
     loadCachedSplitFallback,
+    downloadDb,
     resetEntireDb,
     saveSerpApiSearchCapture,
     getSerpCaptureRows,
@@ -2900,6 +2901,7 @@ export default function App() {
         onResetRegions={() => void resetRegions()}
         cacheTtlHours={cacheTtlHours}
         onCacheTtlChange={(h) => void updateCacheTtl(h)}
+        onDownloadDb={() => void downloadDb()}
         onResetSqlite={() => void resetEntireDb()}
         getSerpCaptureRows={getSerpCaptureRows}
         getSerpCaptureStoredRecord={getSerpCaptureStoredRecord}

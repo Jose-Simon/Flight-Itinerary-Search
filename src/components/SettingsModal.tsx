@@ -23,6 +23,7 @@ type Props = {
   onResetRegions: () => void
   cacheTtlHours: number
   onCacheTtlChange: (hours: number) => void
+  onDownloadDb: () => void
   onResetSqlite: () => void
   getSerpCaptureRows: () => Promise<SerpCaptureListRow[]>
   getSerpCaptureStoredRecord: (id: number) => Promise<SerpCaptureStoredRecord | null>
@@ -43,6 +44,7 @@ export function SettingsModal({
   onResetRegions,
   cacheTtlHours,
   onCacheTtlChange,
+  onDownloadDb,
   onResetSqlite,
   getSerpCaptureRows,
   getSerpCaptureStoredRecord,
@@ -252,15 +254,25 @@ export function SettingsModal({
               Skip SerpApi when a matching Search API run is newer than this (TTL still applies when merging snapshots).
             </span>
           </label>
-          <button
-            type="button"
-            className="btn btn-secondary"
-            onClick={() => {
-              if (window.confirm('Delete the entire local SQLite database and reseed defaults?')) onResetSqlite()
-            }}
-          >
-            Reset local database
-          </button>
+          <div className="settings-db-actions">
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={onDownloadDb}
+              title="Download a copy of the local SQLite database as a .sqlite file"
+            >
+              Download SQLite DB
+            </button>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => {
+                if (window.confirm('Delete the entire local SQLite database and reseed defaults?')) onResetSqlite()
+              }}
+            >
+              Reset local database
+            </button>
+          </div>
 
           <h3 className="h3">Saved SerpApi captures</h3>
           <p className="muted small">

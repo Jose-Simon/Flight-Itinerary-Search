@@ -1711,6 +1711,12 @@ label.field-tight:not(.check-inline) {
   overflow-y: auto;
 }
 
+.settings-db-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
 .sep {
   border: none;
   border-top: 1px solid var(--border);
