@@ -1968,7 +1968,7 @@ export default function App() {
           loading={loading}
         />
 
-        <div className={`layout${!searchPanelOpen ? ' layout--panel-hidden' : ''}`}>
+        <div className={`layout${!searchPanelOpen ? ' layout--panel-hidden' : ''}${returnCustomFilters && tripType === 'round' ? ' layout--wide-panel' : ''}`}>
           {!searchPanelOpen && (
             <button
               type="button"
@@ -2160,92 +2160,97 @@ export default function App() {
               Stops and durations
             </SearchSectionSummary>
             <div className="search-section-body">
-              <div className="filter-section">
-                <div className="filter-section-title">Outbound</div>
-                <StopsFilterBlock
-                  distributionSource={rawOut}
-                  stopsMin={outStopsMin}
-                  stopsMax={outStopsMax}
-                  onStopsMin={setOutStopsMin}
-                  onStopsMax={setOutStopsMax}
-                />
-                <div className="duration-hist-block">
-                  <DurationHistogramFilters
-                    noOuterBlock
-                    distributionSource={rawOut}
-                    hours={outHours}
-                    onHour={(key, v) => setHour('out', key, v)}
-                    legDurationMatch={outLegDurationMatch}
-                    onLegDurationMatch={setOutLegDurationMatch}
-                    legMatchRadioGroup="outbound-leg-duration"
-                    hideLegMatchRadios
-                    legMatchExtra={
-                      <div className="field-tight filter-chip-field">
-                        <span className="label">Leg duration</span>
-                        <div className="filter-chip-row" role="radiogroup" aria-label="Apply leg min and max to">
-                          <FilterChip
-                            radio
-                            selected={outLegDurationMatch === 'any'}
-                            onClick={() => setOutLegDurationMatch('any')}
-                            aria-label="At least one leg"
-                          >
-                            Any
-                          </FilterChip>
-                          <FilterChip
-                            radio
-                            selected={outLegDurationMatch === 'all'}
-                            onClick={() => setOutLegDurationMatch('all')}
-                            aria-label="Every leg"
-                          >
-                            Every
-                          </FilterChip>
-                        </div>
-                      </div>
-                    }
-                  />
+              {returnCustomFilters && tripType === 'round' ? (
+                <div className="filter-dual-wrap">
+                  <div className="filter-dual-col">
+                    <div className="filter-col-head">Outbound</div>
+                    <StopsFilterBlock
+                      distributionSource={rawOut}
+                      stopsMin={outStopsMin}
+                      stopsMax={outStopsMax}
+                      onStopsMin={setOutStopsMin}
+                      onStopsMax={setOutStopsMax}
+                    />
+                    <div className="duration-hist-block">
+                      <DurationHistogramFilters
+                        noOuterBlock
+                        distributionSource={rawOut}
+                        hours={outHours}
+                        onHour={(key, v) => setHour('out', key, v)}
+                        legDurationMatch={outLegDurationMatch}
+                        onLegDurationMatch={setOutLegDurationMatch}
+                        legMatchRadioGroup="outbound-leg-duration"
+                        hideLegMatchRadios
+                        legMatchExtra={
+                          <div className="field-tight filter-chip-field">
+                            <span className="label">Leg duration</span>
+                            <div className="filter-chip-row" role="radiogroup" aria-label="Apply leg min and max to">
+                              <FilterChip radio selected={outLegDurationMatch === 'any'} onClick={() => setOutLegDurationMatch('any')} aria-label="At least one leg">Any</FilterChip>
+                              <FilterChip radio selected={outLegDurationMatch === 'all'} onClick={() => setOutLegDurationMatch('all')} aria-label="Every leg">Every</FilterChip>
+                            </div>
+                          </div>
+                        }
+                      />
+                    </div>
+                  </div>
+                  <div className="filter-dual-col">
+                    <div className="filter-col-head">Return</div>
+                    <StopsFilterBlock
+                      distributionSource={rawReturn}
+                      stopsMin={retStopsMin}
+                      stopsMax={retStopsMax}
+                      onStopsMin={setRetStopsMin}
+                      onStopsMax={setRetStopsMax}
+                    />
+                    <div className="duration-hist-block">
+                      <DurationHistogramFilters
+                        noOuterBlock
+                        distributionSource={rawReturn}
+                        hours={retHours}
+                        onHour={(key, v) => setHour('ret', key, v)}
+                        legDurationMatch={retLegDurationMatch}
+                        onLegDurationMatch={setRetLegDurationMatch}
+                        legMatchRadioGroup="return-leg-duration"
+                        hideLegMatchRadios
+                        legMatchExtra={
+                          <div className="field-tight filter-chip-field">
+                            <span className="label">Leg duration</span>
+                            <div className="filter-chip-row" role="radiogroup" aria-label="Apply leg min and max to (return)">
+                              <FilterChip radio selected={retLegDurationMatch === 'any'} onClick={() => setRetLegDurationMatch('any')} aria-label="At least one leg">Any</FilterChip>
+                              <FilterChip radio selected={retLegDurationMatch === 'all'} onClick={() => setRetLegDurationMatch('all')} aria-label="Every leg">Every</FilterChip>
+                            </div>
+                          </div>
+                        }
+                      />
+                    </div>
+                  </div>
                 </div>
-              </div>
-
-              {tripType === 'round' && returnCustomFilters && (
-                <div className="filter-section filter-section-return">
-                  <div className="filter-section-title">Return</div>
+              ) : (
+                <div className="filter-section">
+                  <div className="filter-section-title">Outbound</div>
                   <StopsFilterBlock
-                    distributionSource={rawReturn}
-                    stopsMin={retStopsMin}
-                    stopsMax={retStopsMax}
-                    onStopsMin={setRetStopsMin}
-                    onStopsMax={setRetStopsMax}
+                    distributionSource={rawOut}
+                    stopsMin={outStopsMin}
+                    stopsMax={outStopsMax}
+                    onStopsMin={setOutStopsMin}
+                    onStopsMax={setOutStopsMax}
                   />
                   <div className="duration-hist-block">
                     <DurationHistogramFilters
                       noOuterBlock
-                      distributionSource={rawReturn}
-                      hours={retHours}
-                      onHour={(key, v) => setHour('ret', key, v)}
-                      legDurationMatch={retLegDurationMatch}
-                      onLegDurationMatch={setRetLegDurationMatch}
-                      legMatchRadioGroup="return-leg-duration"
+                      distributionSource={rawOut}
+                      hours={outHours}
+                      onHour={(key, v) => setHour('out', key, v)}
+                      legDurationMatch={outLegDurationMatch}
+                      onLegDurationMatch={setOutLegDurationMatch}
+                      legMatchRadioGroup="outbound-leg-duration"
                       hideLegMatchRadios
                       legMatchExtra={
                         <div className="field-tight filter-chip-field">
                           <span className="label">Leg duration</span>
-                          <div className="filter-chip-row" role="radiogroup" aria-label="Apply leg min and max to (return)">
-                            <FilterChip
-                              radio
-                              selected={retLegDurationMatch === 'any'}
-                              onClick={() => setRetLegDurationMatch('any')}
-                              aria-label="At least one leg"
-                            >
-                              Any
-                            </FilterChip>
-                            <FilterChip
-                              radio
-                              selected={retLegDurationMatch === 'all'}
-                              onClick={() => setRetLegDurationMatch('all')}
-                              aria-label="Every leg"
-                            >
-                              Every
-                            </FilterChip>
+                          <div className="filter-chip-row" role="radiogroup" aria-label="Apply leg min and max to">
+                            <FilterChip radio selected={outLegDurationMatch === 'any'} onClick={() => setOutLegDurationMatch('any')} aria-label="At least one leg">Any</FilterChip>
+                            <FilterChip radio selected={outLegDurationMatch === 'all'} onClick={() => setOutLegDurationMatch('all')} aria-label="Every leg">Every</FilterChip>
                           </div>
                         </div>
                       }
@@ -2267,29 +2272,45 @@ export default function App() {
               Price
             </SearchSectionSummary>
             <div className="search-section-body">
-              <div className="filter-section">
-                <div className="filter-section-title">Outbound</div>
-                <div className="duration-hist-block">
-                  <PriceHistogramFilter
-                    distributionSource={rawOut}
-                    minStr={outPrice.min}
-                    maxStr={outPrice.max}
-                    onMin={(v) => setOutPrice((p) => ({ ...p, min: v }))}
-                    onMax={(v) => setOutPrice((p) => ({ ...p, max: v }))}
-                    currencyCode={settings.currency}
-                  />
+              {returnCustomFilters && tripType === 'round' ? (
+                <div className="filter-dual-wrap">
+                  <div className="filter-dual-col">
+                    <div className="filter-col-head">Outbound</div>
+                    <div className="duration-hist-block">
+                      <PriceHistogramFilter
+                        distributionSource={rawOut}
+                        minStr={outPrice.min}
+                        maxStr={outPrice.max}
+                        onMin={(v) => setOutPrice((p) => ({ ...p, min: v }))}
+                        onMax={(v) => setOutPrice((p) => ({ ...p, max: v }))}
+                        currencyCode={settings.currency}
+                      />
+                    </div>
+                  </div>
+                  <div className="filter-dual-col">
+                    <div className="filter-col-head">Return</div>
+                    <div className="duration-hist-block">
+                      <PriceHistogramFilter
+                        distributionSource={rawReturn}
+                        minStr={retPrice.min}
+                        maxStr={retPrice.max}
+                        onMin={(v) => setRetPrice((p) => ({ ...p, min: v }))}
+                        onMax={(v) => setRetPrice((p) => ({ ...p, max: v }))}
+                        currencyCode={settings.currency}
+                      />
+                    </div>
+                  </div>
                 </div>
-              </div>
-              {tripType === 'round' && returnCustomFilters && (
-                <div className="filter-section filter-section-return">
-                  <div className="filter-section-title">Return</div>
+              ) : (
+                <div className="filter-section">
+                  <div className="filter-section-title">Outbound</div>
                   <div className="duration-hist-block">
                     <PriceHistogramFilter
-                      distributionSource={rawReturn}
-                      minStr={retPrice.min}
-                      maxStr={retPrice.max}
-                      onMin={(v) => setRetPrice((p) => ({ ...p, min: v }))}
-                      onMax={(v) => setRetPrice((p) => ({ ...p, max: v }))}
+                      distributionSource={rawOut}
+                      minStr={outPrice.min}
+                      maxStr={outPrice.max}
+                      onMin={(v) => setOutPrice((p) => ({ ...p, min: v }))}
+                      onMax={(v) => setOutPrice((p) => ({ ...p, max: v }))}
                       currencyCode={settings.currency}
                     />
                   </div>
@@ -2312,48 +2333,65 @@ export default function App() {
               Time and timezone
             </SearchSectionSummary>
             <div className="search-section-body">
-              <div className="filter-section">
-                <div className="filter-section-title">Outbound</div>
-                <div className="filter-section-title sub">First departure (local)</div>
-                <div className="filter-chip-row" role="group" aria-label="First departure time buckets">
-                  {TIME_BUCKET_DEFS.map(({ id, label, hint }) => (
-                    <FilterChip
-                      key={id}
-                      selected={timeBucketsOut.has(id)}
-                      onClick={() => toggleBucket('out', id)}
-                      title={hint}
-                      aria-label={`${label}, ${hint}`}
-                    >
-                      {label}
-                    </FilterChip>
-                  ))}
+              {returnCustomFilters && tripType === 'round' ? (
+                <div className="filter-dual-wrap">
+                  <div className="filter-dual-col">
+                    <div className="filter-col-head">Outbound</div>
+                    <div className="filter-section-title sub">First departure (local)</div>
+                    <div className="filter-chip-row" role="group" aria-label="First departure time buckets">
+                      {TIME_BUCKET_DEFS.map(({ id, label, hint }) => (
+                        <FilterChip key={id} selected={timeBucketsOut.has(id)} onClick={() => toggleBucket('out', id)} title={hint} aria-label={`${label}, ${hint}`}>{label}</FilterChip>
+                      ))}
+                    </div>
+                    <div className="duration-hist-block">
+                      <TakeoffLandingHistogramFilters
+                        distributionSource={rawOut}
+                        tzByIata={tzByIata}
+                        takeoffMin={outTimeRange.takeoffMin}
+                        takeoffMax={outTimeRange.takeoffMax}
+                        landingMin={outTimeRange.landingMin}
+                        landingMax={outTimeRange.landingMax}
+                        onTakeoffMin={(v) => setOutTimeRange((p) => ({ ...p, takeoffMin: v }))}
+                        onTakeoffMax={(v) => setOutTimeRange((p) => ({ ...p, takeoffMax: v }))}
+                        onLandingMin={(v) => setOutTimeRange((p) => ({ ...p, landingMin: v }))}
+                        onLandingMax={(v) => setOutTimeRange((p) => ({ ...p, landingMax: v }))}
+                      />
+                    </div>
+                  </div>
+                  <div className="filter-dual-col">
+                    <div className="filter-col-head">Return</div>
+                    <div className="filter-section-title sub">First departure (local)</div>
+                    <div className="filter-chip-row" role="group" aria-label="First departure time buckets (return)">
+                      {TIME_BUCKET_DEFS.map(({ id, label, hint }) => (
+                        <FilterChip key={id} selected={timeBucketsRet.has(id)} onClick={() => toggleBucket('ret', id)} title={hint} aria-label={`${label}, ${hint}`}>{label}</FilterChip>
+                      ))}
+                    </div>
+                    <div className="duration-hist-block">
+                      <TakeoffLandingHistogramFilters
+                        distributionSource={rawReturn}
+                        tzByIata={tzByIata}
+                        takeoffMin={retTimeRange.takeoffMin}
+                        takeoffMax={retTimeRange.takeoffMax}
+                        landingMin={retTimeRange.landingMin}
+                        landingMax={retTimeRange.landingMax}
+                        onTakeoffMin={(v) => setRetTimeRange((p) => ({ ...p, takeoffMin: v }))}
+                        onTakeoffMax={(v) => setRetTimeRange((p) => ({ ...p, takeoffMax: v }))}
+                        onLandingMin={(v) => setRetTimeRange((p) => ({ ...p, landingMin: v }))}
+                        onLandingMax={(v) => setRetTimeRange((p) => ({ ...p, landingMax: v }))}
+                      />
+                    </div>
+                  </div>
                 </div>
-                <div className="duration-hist-block">
-                  <TakeoffLandingHistogramFilters
-                    distributionSource={rawOut}
-                    tzByIata={tzByIata}
-                    takeoffMin={outTimeRange.takeoffMin}
-                    takeoffMax={outTimeRange.takeoffMax}
-                    landingMin={outTimeRange.landingMin}
-                    landingMax={outTimeRange.landingMax}
-                    onTakeoffMin={(v) => setOutTimeRange((p) => ({ ...p, takeoffMin: v }))}
-                    onTakeoffMax={(v) => setOutTimeRange((p) => ({ ...p, takeoffMax: v }))}
-                    onLandingMin={(v) => setOutTimeRange((p) => ({ ...p, landingMin: v }))}
-                    onLandingMax={(v) => setOutTimeRange((p) => ({ ...p, landingMax: v }))}
-                  />
-                </div>
-              </div>
-
-              {tripType === 'round' && returnCustomFilters && (
-                <div className="filter-section filter-section-return">
-                  <div className="filter-section-title">Return</div>
-                  <div className="filter-section-title sub">First departure (return, local)</div>
-                  <div className="filter-chip-row" role="group" aria-label="First departure time buckets (return)">
+              ) : (
+                <div className="filter-section">
+                  <div className="filter-section-title">Outbound</div>
+                  <div className="filter-section-title sub">First departure (local)</div>
+                  <div className="filter-chip-row" role="group" aria-label="First departure time buckets">
                     {TIME_BUCKET_DEFS.map(({ id, label, hint }) => (
                       <FilterChip
                         key={id}
-                        selected={timeBucketsRet.has(id)}
-                        onClick={() => toggleBucket('ret', id)}
+                        selected={timeBucketsOut.has(id)}
+                        onClick={() => toggleBucket('out', id)}
                         title={hint}
                         aria-label={`${label}, ${hint}`}
                       >
@@ -2363,22 +2401,22 @@ export default function App() {
                   </div>
                   <div className="duration-hist-block">
                     <TakeoffLandingHistogramFilters
-                      distributionSource={rawReturn}
+                      distributionSource={rawOut}
                       tzByIata={tzByIata}
-                      takeoffMin={retTimeRange.takeoffMin}
-                      takeoffMax={retTimeRange.takeoffMax}
-                      landingMin={retTimeRange.landingMin}
-                      landingMax={retTimeRange.landingMax}
-                      onTakeoffMin={(v) => setRetTimeRange((p) => ({ ...p, takeoffMin: v }))}
-                      onTakeoffMax={(v) => setRetTimeRange((p) => ({ ...p, takeoffMax: v }))}
-                      onLandingMin={(v) => setRetTimeRange((p) => ({ ...p, landingMin: v }))}
-                      onLandingMax={(v) => setRetTimeRange((p) => ({ ...p, landingMax: v }))}
+                      takeoffMin={outTimeRange.takeoffMin}
+                      takeoffMax={outTimeRange.takeoffMax}
+                      landingMin={outTimeRange.landingMin}
+                      landingMax={outTimeRange.landingMax}
+                      onTakeoffMin={(v) => setOutTimeRange((p) => ({ ...p, takeoffMin: v }))}
+                      onTakeoffMax={(v) => setOutTimeRange((p) => ({ ...p, takeoffMax: v }))}
+                      onLandingMin={(v) => setOutTimeRange((p) => ({ ...p, landingMin: v }))}
+                      onLandingMax={(v) => setOutTimeRange((p) => ({ ...p, landingMax: v }))}
                     />
                   </div>
                 </div>
               )}
 
-              <label className="field-tight">
+              <label className="field-tight filter-dual-below">
                 <span className="label">Display timezone</span>
                 <select
                   className="select"

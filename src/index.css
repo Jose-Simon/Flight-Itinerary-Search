@@ -70,6 +70,10 @@ body {
     grid-template-columns: minmax(300px, 400px) minmax(0, 1fr);
     align-items: start;
   }
+  /* Widen panel when outbound+return filters are shown side-by-side */
+  .layout--wide-panel {
+    grid-template-columns: minmax(520px, 640px) minmax(0, 1fr);
+  }
   .layout--panel-hidden {
     grid-template-columns: auto minmax(0, 1fr);
   }
@@ -559,6 +563,45 @@ label.field-tight:not(.check-inline) {
   margin-top: 0.45rem;
   color: var(--muted);
   font-weight: 600;
+}
+
+/* ── Dual-column filter layout (active when "Different filters for return" is on) ── */
+.filter-dual-wrap {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0 1rem;
+  align-items: start;
+}
+
+.filter-dual-col {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+/* Column header — replaces the inner filter-section-title in dual mode */
+.filter-col-head {
+  font-size: 0.65rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--accent);
+  padding: 0.25rem 0 0.35rem;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 0.4rem;
+}
+
+/* In dual mode give each col the same boxed look as a single filter-section */
+.filter-dual-col > .filter-section {
+  border: none;
+  padding: 0;
+  margin: 0;
+}
+
+/* Shared / spanning element below the dual columns (e.g. timezone selector) */
+.filter-dual-below {
+  margin-top: 0.6rem;
 }
 
 .filter-chip-field {
