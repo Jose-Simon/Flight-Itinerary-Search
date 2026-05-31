@@ -95,16 +95,10 @@ export function DateHeatmapPanel({
     ? selectedRouteKey
     : (outResult.routeKeyOrder[0] ?? '')
 
-  // Per-popover verify inputs (reset when active cell changes; pre-fill if already verified)
-  const [verifyPrice, setVerifyPrice] = useState('')
-  const [verifyPaxDesc, setVerifyPaxDesc] = useState('')
-  const [verifyNote, setVerifyNote] = useState('')
+  // Per-combo verify price inputs: keyed by combo index, reset when active cell changes
+  const [comboVerifyInputs, setComboVerifyInputs] = useState<Record<number, string>>({})
   useEffect(() => {
-    if (!hoverCell) return
-    const existing = verifications?.get(vKey(routeKey, hoverCell.outDate, hoverCell.retDate))
-    setVerifyPrice(existing ? String(existing.verifiedPrice) : '')
-    setVerifyPaxDesc(existing?.paxDesc ?? '')
-    setVerifyNote(existing?.note ?? '')
+    setComboVerifyInputs({})
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hoverCell?.outDate, hoverCell?.retDate, routeKey])
 
@@ -179,16 +173,15 @@ export function DateHeatmapPanel({
     return () => { document.removeEventListener('mousedown', onDocClick); window.removeEventListener('keydown', onKey) }
   }, [hoverCell])
 
-  // Save verification from popover input
-  const handleSaveVerification = useCallback(() => {
-    if (!hoverCell || !onUpsertVerification) return
-    const p = Number(verifyPrice)
+  // Save verification for a specific combo (called from per-row verify button)
+  const handleSaveComboVerification = useCallback((
+    outDepTime: string, retDepTime: string, outDate: string, retDate: string, priceStr: string,
+  ) => {
+    if (!onUpsertVerification) return
+    const p = Number(priceStr)
     if (!Number.isFinite(p) || p <= 0) return
-    void onUpsertVerification({
-      routeKey, outDate: hoverCell.outDate, retDate: hoverCell.retDate,
-      verifiedPrice: p, currency, paxDesc: verifyNote.trim(), note: '',
-    })
-  }, [hoverCell, verifyPrice, verifyNote, routeKey, currency, onUpsertVerification])
+    void onUpsertVerification({ routeKey, outDate, retDate, outDepTime, retDepTime, verifiedPrice: p, currency, paxDesc: '', note: '' })
+  }, [routeKey, currency, onUpsertVerification])
 
   // Import JSON from other Claude chat
   const handleImport = useCallback(async () => {
@@ -359,80 +352,66 @@ export function DateHeatmapPanel({
             {/* Itinerary combinations */}
             {hoveredCombos.map((combo, i) => {
               const out = itinSummary(combo.outIt); const ret = itinSummary(combo.retIt)
+              const outDepTime = combo.outIt.segments[0]?.depTime ?? ''
+              const retDepTime = combo.retIt.segments[0]?.depTime ?? ''
+              const existing = verifications?.get(vKey(routeKey, outDepTime, retDepTime))
               return (
-                <a key={i} href={combo.gfUrl} target="_blank" rel="noopener noreferrer" className="pw-heatmap-pop-row">
-                  <div className="pw-heatmap-pop-total">
-                    {formatPriceAmount(combo.total, currency)}
-                    <span className="pw-heatmap-pop-gf-icon">↗</span>
-                  </div>
-                  <div className="pw-heatmap-pop-legs">
-                    <div className="pw-heatmap-pop-leg">
-                      <span className="pw-heatmap-pop-leg-label out">Out</span>
-                      <span className="pw-heatmap-pop-dur">{out.duration}</span>
-                      {out.layovers && <span className="pw-heatmap-pop-layover">{out.layovers}</span>}
-                      {out.flights && <span className="pw-heatmap-pop-flights">{out.flights}</span>}
-                      <span className="pw-heatmap-pop-price">{formatPriceAmount(combo.outPrice, currency)}</span>
+                <div key={i} className="pw-heatmap-pop-row pw-heatmap-pop-combo">
+                  {/* GF link — clicking navigates to Google Flights */}
+                  <a href={combo.gfUrl} target="_blank" rel="noopener noreferrer" className="pw-heatmap-pop-combo-link">
+                    <div className="pw-heatmap-pop-total">
+                      {existing
+                        ? <><span className="pw-heatmap-pop-cached-price">{formatPriceAmount(combo.total, currency)}</span> <span className="pw-heatmap-pop-verify-inline">✓ {formatPriceAmount(existing.verifiedPrice, existing.currency)}{existing.paxDesc ? ` ${existing.paxDesc}` : ''}</span></>
+                        : formatPriceAmount(combo.total, currency)
+                      }
+                      <span className="pw-heatmap-pop-gf-icon">↗</span>
                     </div>
-                    <div className="pw-heatmap-pop-leg">
-                      <span className="pw-heatmap-pop-leg-label ret">Ret</span>
-                      <span className="pw-heatmap-pop-dur">{ret.duration}</span>
-                      {ret.layovers && <span className="pw-heatmap-pop-layover">{ret.layovers}</span>}
-                      {ret.flights && <span className="pw-heatmap-pop-flights">{ret.flights}</span>}
-                      <span className="pw-heatmap-pop-price">{formatPriceAmount(combo.retPrice, currency)}</span>
-                    </div>
-                  </div>
-                </a>
-              )
-            })}
-
-            {/* Verified price section */}
-            <div className="pw-heatmap-pop-verify" onClick={e => e.stopPropagation()}>
-              {(() => {
-                const existing = verifications?.get(vKey(routeKey, hoverCell.outDate, hoverCell.retDate))
-                return (
-                  <>
-                    {existing && (
-                      <div className="pw-heatmap-pop-verify-existing">
-                        <span className="pw-heatmap-verified-badge pw-heatmap-verified-badge--inline">✓ Verified</span>
-                        <span className="pw-heatmap-pop-verify-price">{formatPriceAmount(existing.verifiedPrice, existing.currency)}</span>
-                        {existing.paxDesc && <span className="muted small">{existing.paxDesc}</span>}
-                        {existing.note && <span className="muted small">· {existing.note}</span>}
+                    <div className="pw-heatmap-pop-legs">
+                      <div className="pw-heatmap-pop-leg">
+                        <span className="pw-heatmap-pop-leg-label out">Out</span>
+                        <span className="pw-heatmap-pop-dur">{outDepTime ? outDepTime.slice(11) : ''} {out.duration}</span>
+                        {out.layovers && <span className="pw-heatmap-pop-layover">{out.layovers}</span>}
+                        {out.flights && <span className="pw-heatmap-pop-flights">{out.flights}</span>}
+                        <span className="pw-heatmap-pop-price">{formatPriceAmount(combo.outPrice, currency)}</span>
                       </div>
-                    )}
-                    <div className="pw-heatmap-pop-verify-inputs">
+                      <div className="pw-heatmap-pop-leg">
+                        <span className="pw-heatmap-pop-leg-label ret">Ret</span>
+                        <span className="pw-heatmap-pop-dur">{retDepTime ? retDepTime.slice(11) : ''} {ret.duration}</span>
+                        {ret.layovers && <span className="pw-heatmap-pop-layover">{ret.layovers}</span>}
+                        {ret.flights && <span className="pw-heatmap-pop-flights">{ret.flights}</span>}
+                        <span className="pw-heatmap-pop-price">{formatPriceAmount(combo.retPrice, currency)}</span>
+                      </div>
+                    </div>
+                  </a>
+                  {/* Per-combo verify — stops click propagation so GF link isn't triggered */}
+                  {onUpsertVerification && (
+                    <div className="pw-heatmap-pop-combo-verify" onClick={e => e.stopPropagation()}>
                       <input
                         type="number"
-                        className="input pw-heatmap-pop-verify-input"
-                        placeholder={existing ? 'Update price' : 'Verified price (e.g. 3777)'}
-                        value={verifyPrice}
-                        onChange={e => setVerifyPrice(e.target.value)}
+                        className="input pw-heatmap-pop-verify-mini"
+                        placeholder={existing ? String(existing.verifiedPrice) : 'Verified $'}
+                        value={comboVerifyInputs[i] ?? ''}
+                        onChange={e => setComboVerifyInputs(prev => ({ ...prev, [i]: e.target.value }))}
                       />
-                      <input
-                        type="text"
-                        className="input pw-heatmap-pop-verify-input"
-                        placeholder="Note (e.g. 1A+2C connection)"
-                        value={verifyNote}
-                        onChange={e => setVerifyNote(e.target.value)}
-                      />
-                      <div className="pw-heatmap-pop-verify-btns">
-                        <button type="button" className="btn btn-secondary btn-small" onClick={handleSaveVerification}>
-                          {existing ? 'Update' : 'Save verified'}
-                        </button>
-                        {existing && onRemoveVerification && (
-                          <button
-                            type="button"
-                            className="btn btn-ghost btn-small"
-                            onClick={() => void onRemoveVerification(routeKey, hoverCell.outDate, hoverCell.retDate)}
-                          >
-                            Clear
-                          </button>
-                        )}
-                      </div>
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-tiny"
+                        onClick={() => handleSaveComboVerification(outDepTime, retDepTime, hoverCell.outDate, hoverCell.retDate, comboVerifyInputs[i] ?? '')}
+                      >
+                        {existing ? 'Update' : '✓ Save'}
+                      </button>
+                      {existing && onRemoveVerification && (
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-tiny"
+                          onClick={() => void onRemoveVerification(routeKey, outDepTime, retDepTime)}
+                        >×</button>
+                      )}
                     </div>
-                  </>
-                )
-              })()}
-            </div>
+                  )}
+                </div>
+              )
+            })}
           </div>
         )}
 

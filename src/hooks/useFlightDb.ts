@@ -277,9 +277,9 @@ export function useFlightDb() {
   )
 
   const removeVerification = useCallback(
-    async (routeKey: string, outDate: string, retDate: string) => {
+    async (routeKey: string, outDepTime: string, retDepTime: string) => {
       const db = await getFlightDb()
-      deletePriceVerification(db, routeKey, outDate, retDate)
+      deletePriceVerification(db, routeKey, outDepTime, retDepTime)
       schedulePersist(db)
       setPriceVerifications(loadVerificationMap(db))
     },

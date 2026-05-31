@@ -183,10 +183,10 @@ export type PriceWindowPanelProps = {
    * panels it caps the individual leg price.
    */
   maxPrice?: number | null
-  /** Price verifications keyed by vKey(routeKey, outDate, retDate). */
+  /** Price verifications keyed by vKey(routeKey, outDepTime, retDepTime). */
   verifications?: Map<string, PriceVerificationRow>
   onUpsertVerification?: (row: Omit<PriceVerificationRow, 'id' | 'updatedAt'>) => void | Promise<void>
-  onRemoveVerification?: (routeKey: string, outDate: string, retDate: string) => void | Promise<void>
+  onRemoveVerification?: (routeKey: string, outDepTime: string, retDepTime: string) => void | Promise<void>
 }
 
 const MAX_ROUTES_SHOWN = 30
@@ -280,14 +280,10 @@ export function PriceWindowPanel({
     if (saveConfirmTimerRef.current) clearTimeout(saveConfirmTimerRef.current)
   }, [effSelection?.routeKey, effSelection?.date])
 
-  // Reset verify inputs when selection changes; pre-fill if a verification already exists
+  // Clear verify inputs whenever the selected itinerary changes
   useEffect(() => {
-    if (!effSelection || !selectedReturnDate) { setVerifyPrice(''); setVerifyPaxDesc(''); setVerifyNote(''); return }
-    const existing = verifications?.get(vKey(effSelection.routeKey, effSelection.date, selectedReturnDate))
-    setVerifyPrice(existing ? String(existing.verifiedPrice) : '')
-    setVerifyPaxDesc(existing?.paxDesc ?? '')
-    setVerifyNote(existing?.note ?? '')
-  }, [effSelection?.routeKey, effSelection?.date, selectedReturnDate, verifications])
+    setVerifyPrice(''); setVerifyPaxDesc(''); setVerifyNote('')
+  }, [effSelection?.routeKey, effSelection?.date, selectedReturnDate])
 
   // ─── Return price maps ────────────────────────────────────────────────────
   const minReturnByRouteKey = new Map<string, number>()
@@ -440,9 +436,10 @@ export function PriceWindowPanel({
     const s = new Set<string>()
     if (!verifications) return s
     for (const key of verifications.keys()) {
-      // key format: routeKey::outDate::retDate — extract routeKey + outDate
+      // key format: routeKey::outDepTime::retDepTime
+      // outDepTime is "YYYY-MM-DD HH:mm" — extract just the date for cell-level badge
       const parts = key.split('::')
-      if (parts.length >= 2) s.add(`${parts[0]}|${parts[1]}`)
+      if (parts.length >= 2) s.add(`${parts[0]}|${parts[1].slice(0, 10)}`)
     }
     return s
   }, [verifications])
@@ -618,8 +615,11 @@ export function PriceWindowPanel({
                   )}
 
                   {/* ── Verified price section ── */}
-                  {onUpsertVerification && bestRetDate && (() => {
-                    const vk = vKey(effSelection.routeKey, effSelection.date, bestRetDate)
+                  {onUpsertVerification && (() => {
+                    // Dep times uniquely identify the specific itinerary (not just the date)
+                    const outDepTime = pickedOutboundIt.segments[0]?.depTime ?? ''
+                    const retDepTime = bestRetIt?.segments[0]?.depTime ?? ''
+                    const vk = vKey(effSelection.routeKey, outDepTime, retDepTime)
                     const existing = verifications?.get(vk)
                     return (
                       <div className="pw-sel-verify" onClick={e => e.stopPropagation()}>
@@ -631,6 +631,10 @@ export function PriceWindowPanel({
                             {existing.note && <span className="muted small">· {existing.note}</span>}
                           </div>
                         )}
+                        <div className="pw-sel-verify-label muted small">
+                          {outDepTime ? `Out dep: ${outDepTime.slice(11)}` : 'Out dep: unknown'}
+                          {retDepTime ? ` · Ret dep: ${retDepTime.slice(11)}` : ''}
+                        </div>
                         <div className="pw-sel-verify-inputs">
                           <input
                             type="number"
@@ -664,6 +668,8 @@ export function PriceWindowPanel({
                                   routeKey: effSelection.routeKey,
                                   outDate: effSelection.date,
                                   retDate: bestRetDate,
+                                  outDepTime,
+                                  retDepTime,
                                   verifiedPrice: p,
                                   currency,
                                   paxDesc: verifyPaxDesc.trim(),
@@ -677,7 +683,7 @@ export function PriceWindowPanel({
                               <button
                                 type="button"
                                 className="btn btn-ghost btn-small"
-                                onClick={() => void onRemoveVerification(effSelection.routeKey, effSelection.date, bestRetDate)}
+                                onClick={() => void onRemoveVerification(effSelection.routeKey, outDepTime, retDepTime)}
                               >
                                 Clear
                               </button>

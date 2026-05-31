@@ -17,8 +17,20 @@ function getSql(): Promise<SqlJsStatic> {
   return sqlPromise
 }
 
+function migratePriceVerificationV2(db: Database) {
+  // price_verification was added without out_dep_time / ret_dep_time columns.
+  // Since the table was introduced in the same release as these columns and
+  // no user data exists yet, drop and recreate so the UNIQUE constraint is correct.
+  const info = db.exec("SELECT name FROM pragma_table_info('price_verification')")
+  const cols = (info[0]?.values ?? []).map((r) => r[0] as string)
+  if (!cols.includes('out_dep_time')) {
+    db.run('DROP TABLE IF EXISTS price_verification')
+  }
+}
+
 function migrate(db: Database) {
   db.run('PRAGMA foreign_keys = ON')
+  migratePriceVerificationV2(db)   // must run before SCHEMA_V1 recreates the table
   db.exec(SCHEMA_V1)
   syncRegionCatalog(db)
   seedRegionsIfEmpty(db)

@@ -3441,6 +3441,12 @@ button.pw-stat-col--med {
   font-variant-numeric: tabular-nums;
 }
 
+.pw-sel-verify-label {
+  font-size: 0.68rem;
+  margin-bottom: 0.3rem;
+  opacity: 0.75;
+}
+
 .pw-sel-verify-inputs {
   display: flex;
   flex-direction: column;
@@ -3950,6 +3956,54 @@ button.pw-stat-col--med {
   font-variant-numeric: tabular-nums;
   color: var(--text);
   white-space: nowrap;
+}
+
+/* Per-combo row with separate GF link + inline verify input */
+.pw-heatmap-pop-combo {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.pw-heatmap-pop-combo-link {
+  display: block;
+  padding: 0.5rem 0.65rem 0.35rem;
+  text-decoration: none;
+  color: var(--text);
+  transition: background 0.12s;
+  cursor: pointer;
+}
+.pw-heatmap-pop-combo-link:hover { background: rgba(255,255,255,0.06); }
+
+.pw-heatmap-pop-cached-price {
+  text-decoration: line-through;
+  opacity: 0.55;
+  font-weight: 500;
+  font-size: 0.8rem;
+}
+
+.pw-heatmap-pop-verify-inline {
+  font-size: 0.78rem;
+  color: #4ade80;
+  font-weight: 700;
+  margin-left: 0.25rem;
+}
+
+.pw-heatmap-pop-combo-verify {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.2rem 0.65rem 0.4rem;
+  background: rgba(74,222,128,0.04);
+  border-top: 1px solid rgba(74,222,128,0.1);
+}
+
+.pw-heatmap-pop-verify-mini {
+  font-size: 0.72rem;
+  padding: 0.2rem 0.4rem;
+  height: auto;
+  width: 90px;
+  flex-shrink: 0;
 }
 
 /* ── Verified price section (bottom of popover) ─────────────────────────── */
