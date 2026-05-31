@@ -89,7 +89,7 @@ export function DateHeatmapPanel({ outResult, retResult, currency }: Props) {
   const [show2pct, setShow2pct] = useState(false)
   const [show5pct, setShow5pct] = useState(false)
   const [hoverCell, setHoverCell] = useState<HoverCell | null>(null)
-  const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const popoverRef = useRef<HTMLDivElement>(null)
 
   // Keep route key valid when results change
   const routeKey = outResult.routeKeyOrder.includes(selectedRouteKey)
@@ -127,7 +127,7 @@ export function DateHeatmapPanel({ outResult, retResult, currency }: Props) {
     return { cells, minP: minP === Infinity ? 0 : minP, maxP: maxP === -Infinity ? 0 : maxP, cheapestKey }
   }, [outDates, retDates, outDateMap, retDateMap])
 
-  // Top itinerary combinations for the currently hovered cell
+  // Top itinerary combinations for the currently active (clicked) cell
   const hoveredCombos = useMemo((): Combo[] => {
     if (!hoverCell) return []
     const { outDate, retDate } = hoverCell
@@ -160,32 +160,32 @@ export function DateHeatmapPanel({ outResult, retResult, currency }: Props) {
     return combos.sort((a, b) => a.total - b.total).slice(0, 6)
   }, [hoverCell, outDateMap, retDateMap])
 
-  // Hover handlers with enter/leave timer so mouse can move into the popover
-  const handleCellEnter = useCallback((outDate: string, retDate: string, e: React.MouseEvent) => {
-    if (hoverTimerRef.current) { clearTimeout(hoverTimerRef.current); hoverTimerRef.current = null }
-    const el = e.currentTarget as HTMLElement
-    const r = el.getBoundingClientRect()
-    setHoverCell({ outDate, retDate, rect: { top: r.top, left: r.left, right: r.right, bottom: r.bottom } })
+  // Click a cell: toggle popover open/closed for that cell
+  const handleCellClick = useCallback((outDate: string, retDate: string, e: React.MouseEvent) => {
+    e.stopPropagation()
+    setHoverCell((prev) => {
+      if (prev?.outDate === outDate && prev?.retDate === retDate) return null
+      const el = e.currentTarget as HTMLElement
+      const r = el.getBoundingClientRect()
+      return { outDate, retDate, rect: { top: r.top, left: r.left, right: r.right, bottom: r.bottom } }
+    })
   }, [])
 
-  const handleCellLeave = useCallback(() => {
-    hoverTimerRef.current = setTimeout(() => setHoverCell(null), 180)
-  }, [])
-
-  const handlePopoverEnter = useCallback(() => {
-    if (hoverTimerRef.current) { clearTimeout(hoverTimerRef.current); hoverTimerRef.current = null }
-  }, [])
-
-  const handlePopoverLeave = useCallback(() => {
-    setHoverCell(null)
-  }, [])
-
-  // Close popover on Escape
+  // Close on click outside the popover or on Escape
   useEffect(() => {
     if (!hoverCell) return
+    const onDocClick = (e: MouseEvent) => {
+      if (popoverRef.current && !popoverRef.current.contains(e.target as Node)) {
+        setHoverCell(null)
+      }
+    }
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setHoverCell(null) }
+    document.addEventListener('mousedown', onDocClick)
     window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDocClick)
+      window.removeEventListener('keydown', onKey)
+    }
   }, [hoverCell])
 
   // Route dropdown options
@@ -302,8 +302,7 @@ export function DateHeatmapPanel({ outResult, retResult, currency }: Props) {
                             tier,
                           ].filter(Boolean).join(' ')}
                           style={{ background: heatColor(price, minP, maxP) }}
-                          onMouseEnter={(e) => handleCellEnter(outDate, retDate, e)}
-                          onMouseLeave={handleCellLeave}
+                          onClick={(e) => handleCellClick(outDate, retDate, e)}
                         >
                           {isCheapest && <span className="pw-heatmap-star">✦</span>}
                           <span>{formatPriceAmount(price, currency)}</span>
@@ -321,16 +320,15 @@ export function DateHeatmapPanel({ outResult, retResult, currency }: Props) {
         {/* ── Hover popover ─────────────────────────────────────────────── */}
         {hoverCell && hoveredCombos.length > 0 && (
           <div
+            ref={popoverRef}
             className="pw-heatmap-popover"
             style={popoverStyle}
-            onMouseEnter={handlePopoverEnter}
-            onMouseLeave={handlePopoverLeave}
           >
             <div className="pw-heatmap-pop-header">
               <span className="pw-heatmap-pop-dates">
                 Out: {shortDate(hoverCell.outDate)} · Ret: {shortDate(hoverCell.retDate)}
               </span>
-              <span className="pw-heatmap-pop-hint">Hover to keep open · click to open GF</span>
+              <span className="pw-heatmap-pop-hint">Click outside or Esc to close</span>
             </div>
             {hoveredCombos.map((combo, i) => {
               const out = itinSummary(combo.outIt)
