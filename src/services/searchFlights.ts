@@ -41,17 +41,20 @@ export function dateWindow(center: string, flex: number): string[] {
   return dates
 }
 
-/** SerpApi calls in small parallel chunks; preserves date order for debug export. */
+const FETCH_CHUNK_SIZE = 5
+
+/** SerpApi calls in parallel chunks; preserves date order for debug export. */
 async function fetchGoogleFlightsByDates(
   dates: string[],
   dep: string,
   arr: string,
   input: SearchFlightInput,
   sort: SortMode,
+  onChunk?: (completedDates: number, totalDates: number) => void,
 ): Promise<SerpSearchDebugQuery[]> {
   const queries: SerpSearchDebugQuery[] = []
-  for (let i = 0; i < dates.length; i += 3) {
-    const chunk = dates.slice(i, i + 3)
+  for (let i = 0; i < dates.length; i += FETCH_CHUNK_SIZE) {
+    const chunk = dates.slice(i, i + FETCH_CHUNK_SIZE)
     const part = await Promise.all(
       chunk.map(async (outboundDate) => {
         const requestParams = buildSerpFlightParams({
@@ -72,6 +75,7 @@ async function fetchGoogleFlightsByDates(
       }),
     )
     queries.push(...part)
+    onChunk?.(Math.min(i + FETCH_CHUNK_SIZE, dates.length), dates.length)
   }
   return queries
 }
@@ -174,6 +178,7 @@ export async function searchPriceWindow(
     roundTrip: boolean
     excludedAirports: Set<string>
   },
+  onProgress?: (completedDates: number, totalDates: number) => void,
 ): Promise<PriceWindowSearchResult> {
   const dep = input.origins.join(',')
   const arr = input.destinations.join(',')
@@ -220,9 +225,16 @@ export async function searchPriceWindow(
   // flight appears in both, the priced version is always kept.
   // A final filter drops any itinerary that still lacks a price (rare SerpApi
   // edge-case when quota is low or the response is partial).
+  let progressMax = 0
+  const onChunk = (completed: number, total: number) => {
+    if (completed > progressMax) {
+      progressMax = completed
+      onProgress?.(completed, total)
+    }
+  }
   const [priceQueries, durationQueries] = await Promise.all([
-    fetchGoogleFlightsByDates(dates, dep, arr, fetchInput, 'price'),
-    fetchGoogleFlightsByDates(dates, dep, arr, fetchInput, 'duration'),
+    fetchGoogleFlightsByDates(dates, dep, arr, fetchInput, 'price', onChunk),
+    fetchGoogleFlightsByDates(dates, dep, arr, fetchInput, 'duration', onChunk),
   ])
 
   for (const q of [...priceQueries, ...durationQueries]) {
@@ -270,6 +282,7 @@ export async function searchDirection(
     excludedAirports: Set<string>
     sort: SortMode
   },
+  onProgress?: (completedDates: number, totalDates: number) => void,
 ): Promise<SearchDirectionResult> {
   const dep = input.origins.join(',')
   const arr = input.destinations.join(',')
@@ -303,9 +316,16 @@ export async function searchDirection(
   // Run price-sorted and duration-sorted queries in parallel — same approach as searchPriceWindow.
   // Google returns different airline rankings per sort mode; the union captures routes that appear
   // in only one. Price-sorted results come first in dedup so the priced version wins for shared flights.
+  let progressMax = 0
+  const onChunk = (completed: number, total: number) => {
+    if (completed > progressMax) {
+      progressMax = completed
+      onProgress?.(completed, total)
+    }
+  }
   const [priceQueries, durationQueries] = await Promise.all([
-    fetchGoogleFlightsByDates(dates, dep, arr, input, 'price'),
-    fetchGoogleFlightsByDates(dates, dep, arr, input, 'duration'),
+    fetchGoogleFlightsByDates(dates, dep, arr, input, 'price', onChunk),
+    fetchGoogleFlightsByDates(dates, dep, arr, input, 'duration', onChunk),
   ])
 
   let serpOptionRows = 0

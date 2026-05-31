@@ -92,7 +92,10 @@ function segmentMatchesLegHours(seg: NormalizedSegment, f: FilterState): boolean
 }
 
 export function passesItineraryFilters(it: NormalizedItinerary, f: FilterState): boolean {
-  const connections = Math.max(0, it.segments.length - 1)
+  // Count intermediate airports from the waypoint path rather than segments.length-1
+  // so that ground-transfer legs (e.g. HND→NRT bus) are counted as a stop even though
+  // they create a gap in the segments array rather than a dedicated segment entry.
+  const connections = Math.max(0, it.waypointKey.split('-').length - 2)
   if (connections > f.maxLayovers) return false
   if (f.minStops != null && connections < f.minStops) return false
   if (f.maxStops != null && connections > f.maxStops) return false

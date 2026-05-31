@@ -242,6 +242,7 @@ export default function App() {
   const [pwRawRetPerDate, setPwRawRetPerDate] = useState<PriceWindowPerDateEntry[]>([])
 
   const [loading, setLoading] = useState(false)
+  const [searchProgress, setSearchProgress] = useState<{ phase: string; current: number; total: number } | null>(null)
   const [searchRefreshKey, setSearchRefreshKey] = useState(0)
   const [error, setError] = useState<string | null>(null)
   const [rawOut, setRawOut] = useState<NormalizedItinerary[]>([])
@@ -972,6 +973,7 @@ export default function App() {
   const runSearch = useCallback(async () => {
     setError(null)
     setCacheHint(null)
+    setSearchProgress(null)
 
     if (searchSource === 'api' && !settings.mockMode && !settings.apiKey.trim()) {
       setError('Add your SerpApi key in Settings or enable mock mode.')
@@ -1069,6 +1071,7 @@ export default function App() {
             excludedAirports: PIPELINE_EXCLUDED_NONE,
             sort: sortOut,
           },
+          (current, total) => setSearchProgress({ phase: 'outbound', current, total }),
         )
         out = outRes.itineraries
         serpDebugOutbound = outRes.serpDebug
@@ -1142,6 +1145,7 @@ export default function App() {
               excludedAirports: PIPELINE_EXCLUDED_NONE,
               sort: sortReturn,
             },
+            (current, total) => setSearchProgress({ phase: 'return', current, total }),
           )
           ret = retRes.itineraries
           serpDebugReturn = retRes.serpDebug
@@ -1207,6 +1211,7 @@ export default function App() {
       setError(e instanceof Error ? e.message : 'Search failed')
     } finally {
       setLoading(false)
+      setSearchProgress(null)
       if (!settings.mockMode) setSearchRefreshKey((k) => k + 1)
     }
   }, [
@@ -1235,6 +1240,7 @@ export default function App() {
   const runPriceWindowSearch = useCallback(async () => {
     setError(null)
     setCacheHint(null)
+    setSearchProgress(null)
 
     if (searchSource === 'api' && !settings.mockMode && !settings.apiKey.trim()) {
       setError('Add your SerpApi key in Settings or enable mock mode.')
@@ -1336,12 +1342,17 @@ export default function App() {
         currency: settings.currency,
       }
 
-      const outRes = await searchPriceWindow(baseInput, 'outbound', {
-        primaryDestination,
-        multipleDestinations,
-        roundTrip: tripType === 'round',
-        excludedAirports: PIPELINE_EXCLUDED_NONE,
-      })
+      const outRes = await searchPriceWindow(
+        baseInput,
+        'outbound',
+        {
+          primaryDestination,
+          multipleDestinations,
+          roundTrip: tripType === 'round',
+          excludedAirports: PIPELINE_EXCLUDED_NONE,
+        },
+        (current, total) => setSearchProgress({ phase: 'outbound', current, total }),
+      )
       setPwRawOutPerDate(outRes.perDate)
       setPwOutResult(buildPriceWindowResult(outRes.perDate))
       setRawOut(outRes.perDate.flatMap((d) => d.itineraries))
@@ -1370,12 +1381,17 @@ export default function App() {
           hl: settings.hl,
           currency: settings.currency,
         }
-        const retRes = await searchPriceWindow(retInput, 'return', {
-          primaryDestination,
-          multipleDestinations,
-          roundTrip: true,
-          excludedAirports: PIPELINE_EXCLUDED_NONE,
-        })
+        const retRes = await searchPriceWindow(
+          retInput,
+          'return',
+          {
+            primaryDestination,
+            multipleDestinations,
+            roundTrip: true,
+            excludedAirports: PIPELINE_EXCLUDED_NONE,
+          },
+          (current, total) => setSearchProgress({ phase: 'return', current, total }),
+        )
         setPwRawRetPerDate(retRes.perDate)
         setPwRetResult(buildPriceWindowResult(retRes.perDate))
         setRawReturn(retRes.perDate.flatMap((d) => d.itineraries))
@@ -1415,6 +1431,7 @@ export default function App() {
       setError(e instanceof Error ? e.message : 'Search failed')
     } finally {
       setLoading(false)
+      setSearchProgress(null)
       if (!settings.mockMode) setSearchRefreshKey((k) => k + 1)
     }
   }, [
@@ -2029,7 +2046,11 @@ export default function App() {
               disabled={loading}
               onClick={() => searchGoal === 'priceWindow' ? void runPriceWindowSearch() : void runSearch()}
             >
-              {loading ? 'Searching…' : 'Search'}
+              {loading
+                ? searchProgress
+                  ? `${searchProgress.phase === 'outbound' ? 'Outbound' : 'Return'} ${searchProgress.current}/${searchProgress.total} dates…`
+                  : 'Searching…'
+                : 'Search'}
             </button>
             {settings.mockMode && <span className="muted tiny">Mock</span>}
             {cacheHint && <span className="muted tiny search-top-bar-hint">{cacheHint}</span>}
