@@ -129,7 +129,7 @@ Based on the diff class:
 
 - **Wrong trip type flag**: Ensure `returnIt` argument to `buildGoogleFlightsDeepLink` is non-null for round trips.
 
-- **Segment field 5 missing when expected**: In `googleFlightsLink.ts`, `airlineCodeFromSeg` may fail to parse the carrier code. Check that `seg.flightNumber` is stored as `"XX NNNN"` or `"XXNNNN"` format, not just digits.
+- **Segment field 5 missing when expected**: In `googleFlightsLink.ts`, `airlineCodeFromSeg` may fail to parse the carrier code. Common cause: IATA codes that start with a digit (e.g. Condor `4Y`, World2fly `2W`) are not matched by a `[A-Z][A-Z0-9]` pattern. The regex must also cover `[0-9][A-Z]`. Similarly `flightNumOnly` must strip digit-starting carrier prefixes via a full carrier-prefix regex rather than `replace(/^[^0-9]*/, '')` (which stops stripping at the first digit and leaves the whole string intact for codes like `4Y 51`). Fixed in `googleFlightsLink.ts` as of commit after 909da6b.
 
 ## Example invocation
 

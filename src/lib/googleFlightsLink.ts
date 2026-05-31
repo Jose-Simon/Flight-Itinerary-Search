@@ -78,20 +78,27 @@ function segmentDate(seg: NormalizedSegment, fallbackDate: string): string {
 }
 
 function flightNumOnly(seg: NormalizedSegment): string {
-  // "QR 702" → "702", "BA 112" → "112", "AA 3024" → "3024"
+  // Strip 2-char IATA carrier prefix (handles letter-first AND digit-first codes like "4Y"):
+  // "QR 702" → "702", "LH758" → "758", "B6 1234" → "1234", "4Y 51" → "51", "2W 123" → "123"
+  const m = seg.flightNumber?.trim().match(/^(?:[A-Z][A-Z0-9]|[0-9][A-Z])\s*(\d+)/)
+  if (m) return m[1]
+  // Fallback: strip any leading non-digit run (e.g. bare digits already)
   return seg.flightNumber?.replace(/^[^0-9]*/, '').trim() ?? ''
 }
 
 /**
- * Extract the IATA 2-letter carrier code from a flight number string.
- * "EY 263" → "EY",  "QR702" → "QR",  "B6 1234" → "B6"
+ * Extract the IATA 2-char carrier code from a flight number string.
+ * "EY 263" → "EY",  "QR702" → "QR",  "B6 1234" → "B6",  "4Y 51" → "4Y"
  * Falls back to empty string (Google Flights will infer from flight number).
+ *
+ * IATA codes may start with a digit (e.g. Condor = "4Y", World2fly = "2W"),
+ * so we match [A-Z][A-Z0-9] OR [0-9][A-Z] to cover both forms.
  *
  * Note: seg.airline is the *full airline name* ("Etihad Airways"), NOT the IATA
  * code. The IATA code lives in the flight_number string from SerpApi.
  */
 function airlineCodeFromSeg(seg: NormalizedSegment): string {
-  const m = seg.flightNumber?.trim().match(/^([A-Z][A-Z0-9])\s*\d/)
+  const m = seg.flightNumber?.trim().match(/^([A-Z][A-Z0-9]|[0-9][A-Z])\s*\d/)
   return m ? m[1] : ''
 }
 
