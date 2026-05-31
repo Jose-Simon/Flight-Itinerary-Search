@@ -1974,6 +1974,30 @@ export default function App() {
     }
   }
 
+  const resetAllFilters = useCallback(() => {
+    // Stops and durations
+    setOutStopsMin(''); setOutStopsMax(''); setRetStopsMin(''); setRetStopsMax('')
+    setOutHours({ ...EMPTY_HOURS }); setRetHours({ ...EMPTY_HOURS })
+    setOutLegDurationMatch('all'); setRetLegDurationMatch('all')
+    // Price
+    setOutPrice({ ...EMPTY_PRICE }); setRetPrice({ ...EMPTY_PRICE })
+    // Time and timezone
+    setTimeBucketsOut(new Set()); setTimeBucketsRet(new Set())
+    setOutTimeRange({ ...EMPTY_TIME_RANGE }); setRetTimeRange({ ...EMPTY_TIME_RANGE })
+    setDisplayTimezone('')
+    // Airlines, aircraft, and layover
+    setAirlineExcludedCodes(new Set())
+    setAircraftSelectedCodes([]); setAircraftMatchMode('any')
+    setLayoverGeoFilterActive(false)
+    setLayoverRegionOn(() => {
+      const o = {} as Record<RegionId, boolean>
+      for (const k of REGION_IDS_IN_UI_ORDER) o[k] = true
+      return o
+    })
+    setLayoverAirportOff(new Set())
+    setExcludeTechnical(false); setShowOpenJaw(true); setUniqueRoutesOnly(true)
+  }, [])
+
   if (!airports || !dbReady) {
     return (
       <div className="app">
@@ -2232,6 +2256,12 @@ export default function App() {
               )}
             </div>
           </details>
+
+          <div className="reset-all-filters-row">
+            <button type="button" className="btn btn-ghost btn-small" onClick={resetAllFilters}>
+              Reset all filters
+            </button>
+          </div>
 
           <details className="search-section" open>
             <SearchSectionSummary
