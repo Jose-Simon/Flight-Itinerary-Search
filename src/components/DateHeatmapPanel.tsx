@@ -151,12 +151,13 @@ export function DateHeatmapPanel({
   }, [hoverCell, outDateMap, retDateMap])
 
   // Click handlers
+  // getBoundingClientRect must be captured synchronously — React nullifies e.currentTarget
+  // after the handler returns (synthetic event pooling), so the setState updater can't access it.
   const handleCellClick = useCallback((outDate: string, retDate: string, e: React.MouseEvent) => {
     e.stopPropagation()
+    const r = (e.currentTarget as HTMLElement).getBoundingClientRect()
     setHoverCell(prev => {
       if (prev?.outDate === outDate && prev?.retDate === retDate) return null
-      const el = e.currentTarget as HTMLElement
-      const r = el.getBoundingClientRect()
       return { outDate, retDate, rect: { top: r.top, left: r.left, right: r.right, bottom: r.bottom } }
     })
   }, [])
