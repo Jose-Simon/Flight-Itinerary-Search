@@ -8,6 +8,8 @@ import {
   buildGoogleFlightsSearchUrl,
   itineraryDetailsText,
 } from '../lib/googleFlightsLink'
+import { ItineraryCard } from './ItineraryCard'
+import type { AirlinesMeta } from '../lib/airlineMetaLookup'
 
 /** Internal state for uncontrolled mode only. */
 type CellSelection =
@@ -156,6 +158,14 @@ export type PriceWindowPanelProps = {
   ) => void
   /** Show a collapse/expand toggle in the panel title bar. Default: true. */
   collapsible?: boolean
+  // ── Rich-card props (used by selectionOnly summary) ──────────────────────
+  /** Required to render full ItineraryCard in the selection summary. */
+  tzByIata?: Map<string, string>
+  displayTimezone?: string
+  airlineDirectory?: Record<string, string>
+  airlinesMeta?: AirlinesMeta
+  layoverLongMinHours?: number
+  layoverShortMaxHours?: number
   /**
    * Hide cells whose displayed price exceeds this value.
    * For the combined panel this caps outbound+return totals; for single-leg
@@ -181,6 +191,12 @@ export function PriceWindowPanel({
   selectedReturnIt,
   selectedReturnDate,
   onSave,
+  tzByIata,
+  displayTimezone = '',
+  airlineDirectory,
+  airlinesMeta,
+  layoverLongMinHours = 4,
+  layoverShortMaxHours = 1,
 }: PriceWindowPanelProps) {
   // Internal selection state — only used in uncontrolled mode (controlledSelection === undefined)
   const [selection, setSelection] = useState<CellSelection | null>(null)
@@ -468,21 +484,78 @@ export function PriceWindowPanel({
             {effSelection && pickedOutboundIt ? (() => {
               const { bestRetIt, bestRetDate, url, deepUrl, reliable, outPrice, retPrice, totalPrice, copyDetails } =
                 buildDetailContext(pickedOutboundIt, effSelection.date)
+
+              // Derive airports from routeKey for per-leg GF links
+              const routeAirports = effSelection.routeKey.split('|')[0].split('-')
+              const outOrigins = [routeAirports[0]]
+              const outDests = [routeAirports[routeAirports.length - 1]]
+
+              // Use rich ItineraryCard when display props are available, else fall back to compact
+              const canShowRichCard = !!(tzByIata && airlinesMeta && airlineDirectory)
+
+              const sharedCardProps = canShowRichCard ? {
+                tzByIata: tzByIata!,
+                displayTimezone,
+                airlineDirectory: airlineDirectory!,
+                airlinesMeta: airlinesMeta!,
+                namesByIata,
+                layoverLongMinHours,
+                layoverShortMaxHours,
+                priceCurrency: currency,
+              } : null
+
               return (
                 <>
-                  <div className="pw-sel-row">
-                    <span className="pw-sel-label">Outbound · {shortDateWithDay(effSelection.date)}</span>
-                    <ItineraryCompact it={pickedOutboundIt} currency={currency} />
-                  </div>
-                  {bestRetIt ? (
-                    <div className="pw-sel-row">
-                      <span className="pw-sel-label">Return · {shortDateWithDay(bestRetDate)}</span>
-                      <ItineraryCompact it={bestRetIt} currency={currency} />
+                  {canShowRichCard && sharedCardProps ? (
+                    <div className="srt-legs">
+                      <div className="srt-leg">
+                        <span className="srt-leg-label">Outbound · {shortDateWithDay(effSelection.date)}</span>
+                        <ItineraryCard
+                          {...sharedCardProps}
+                          it={pickedOutboundIt}
+                          gfOrigins={outOrigins}
+                          gfDestinations={outDests}
+                          linkDate={effSelection.date}
+                          returnDate={bestRetIt ? bestRetDate : null}
+                        />
+                      </div>
+                      {bestRetIt ? (
+                        <div className="srt-leg srt-leg--return">
+                          <span className="srt-leg-label">Return · {shortDateWithDay(bestRetDate)}</span>
+                          <ItineraryCard
+                            {...sharedCardProps}
+                            it={bestRetIt}
+                            gfOrigins={outDests}
+                            gfDestinations={outOrigins}
+                            linkDate={bestRetDate}
+                            returnDate={null}
+                          />
+                        </div>
+                      ) : (
+                        <div className="srt-leg srt-leg--return">
+                          <p className="pw-sel-hint muted small">
+                            ↓ Pick a return date in the Return panel below
+                          </p>
+                        </div>
+                      )}
                     </div>
                   ) : (
-                    <p className="pw-sel-hint muted small">
-                      ↓ Pick a return date in the Return panel below
-                    </p>
+                    <>
+                      <div className="pw-sel-row">
+                        <span className="pw-sel-label">Outbound · {shortDateWithDay(effSelection.date)}</span>
+                        <ItineraryCompact it={pickedOutboundIt} currency={currency} />
+                      </div>
+                      {bestRetIt ? (
+                        <div className="pw-sel-row">
+                          <span className="pw-sel-label">Return · {shortDateWithDay(bestRetDate)}</span>
+                          <ItineraryCompact it={bestRetIt} currency={currency} />
+                        </div>
+                      ) : (
+                        <p className="pw-sel-hint muted small">
+                          ↓ Pick a return date in the Return panel below
+                        </p>
+                      )}
+                    </>
                   )}
                   {totalPrice != null && (
                     <div className="pw-sel-total">
@@ -499,12 +572,12 @@ export function PriceWindowPanel({
                       href={url}
                       target="_blank"
                       rel="noreferrer"
-                      title={deepUrl ? 'Pre-selected exact flights' : reliable ? undefined : 'Approximate — multi-origin/destination'}
+                      title={deepUrl ? 'Pre-selected exact flights (round trip)' : reliable ? undefined : 'Approximate — multi-origin/destination'}
                     >
-                      Google Flights{deepUrl ? ' ✓' : (!reliable ? ' (~)' : '')}
+                      Google Flights{deepUrl ? ' ✓' : (!reliable ? ' (~)' : '')} (round trip)
                     </a>
                     <button type="button" className="itin-action" onClick={() => void copyDetails()}>
-                      Copy details
+                      Copy both legs
                     </button>
                     {onSave && (
                       <button

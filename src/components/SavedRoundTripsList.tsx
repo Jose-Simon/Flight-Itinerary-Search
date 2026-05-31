@@ -1,19 +1,21 @@
 import type { SavedResultRow } from '../db/savedResultTypes'
 import type { SavedResultPayloadV2 } from '../db/savedResultTypes'
-import type { NormalizedItinerary, NormalizedSegment } from '../lib/types'
 import { formatPriceAmount } from '../lib/formatPrice'
 import { buildGoogleFlightsDeepLink, buildGoogleFlightsSearchUrl, itineraryDetailsText } from '../lib/googleFlightsLink'
+import { ItineraryCard } from './ItineraryCard'
+import type { AirlinesMeta } from '../lib/airlineMetaLookup'
 
 type Props = {
   items: SavedResultRow[]
   currency: string
   onRemove: (scheduleKey: string) => void
-}
-
-function formatMins(m: number): string {
-  const h = Math.floor(m / 60)
-  const mm = m % 60
-  return mm > 0 ? `${h}h ${mm}m` : `${h}h`
+  tzByIata: Map<string, string>
+  displayTimezone: string
+  airlineDirectory: Record<string, string>
+  airlinesMeta: AirlinesMeta
+  namesByIata: Map<string, string>
+  layoverLongMinHours: number
+  layoverShortMaxHours: number
 }
 
 function shortDateWithDay(iso: string): string {
@@ -21,40 +23,18 @@ function shortDateWithDay(iso: string): string {
   return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC' })
 }
 
-function timeHM(raw: string | undefined): string {
-  if (!raw) return '—'
-  return raw.length >= 5 ? raw.slice(-5) : raw
-}
-
-function ItinLines({ it, currency }: { it: NormalizedItinerary; currency: string }) {
-  return (
-    <div className="srt-itin">
-      {it.segments.map((seg: NormalizedSegment, i: number) => (
-        <div key={i}>
-          <div className="srt-seg">
-            <span className="srt-airline">{seg.airline ?? ''}</span>
-            {seg.flightNumber && <span className="srt-fn">{seg.flightNumber}</span>}
-            <span className="srt-route">
-              {seg.dep} {timeHM(seg.depTime)} → {seg.arr} {timeHM(seg.arrTime)}
-            </span>
-            <span className="srt-dur muted">{formatMins(seg.durationMinutes)}</span>
-          </div>
-          {it.layovers[i] && !it.layovers[i].isTechnical && (
-            <div className="srt-layover muted small">
-              ↳ {it.layovers[i].airport} · {formatMins(it.layovers[i].durationMinutes)} layover
-            </div>
-          )}
-        </div>
-      ))}
-      <div className="srt-itin-footer">
-        {formatMins(it.totalDurationMinutes)}
-        {it.price != null ? ` · ${formatPriceAmount(it.price, currency)}` : ''}
-      </div>
-    </div>
-  )
-}
-
-export function SavedRoundTripsList({ items, currency, onRemove }: Props) {
+export function SavedRoundTripsList({
+  items,
+  currency,
+  onRemove,
+  tzByIata,
+  displayTimezone,
+  airlineDirectory,
+  airlinesMeta,
+  namesByIata,
+  layoverLongMinHours,
+  layoverShortMaxHours,
+}: Props) {
   if (items.length === 0) return null
 
   return (
@@ -85,16 +65,41 @@ export function SavedRoundTripsList({ items, currency, onRemove }: Props) {
             await navigator.clipboard.writeText(lines.join('\n'))
           }
 
+          const sharedCardProps = {
+            tzByIata,
+            displayTimezone,
+            airlineDirectory,
+            airlinesMeta,
+            namesByIata,
+            layoverLongMinHours,
+            layoverShortMaxHours,
+            priceCurrency: currency,
+          }
+
           return (
             <li key={row.id} className="srt-card">
               <div className="srt-legs">
                 <div className="srt-leg">
                   <span className="srt-leg-label">Outbound · {shortDateWithDay(p.outboundDate)}</span>
-                  <ItinLines it={p.outboundItinerary} currency={currency} />
+                  <ItineraryCard
+                    {...sharedCardProps}
+                    it={p.outboundItinerary}
+                    gfOrigins={p.gfOrigins}
+                    gfDestinations={p.gfDestinations}
+                    linkDate={p.outboundDate}
+                    returnDate={p.returnDate}
+                  />
                 </div>
                 <div className="srt-leg srt-leg--return">
                   <span className="srt-leg-label">Return · {shortDateWithDay(p.returnDate)}</span>
-                  <ItinLines it={p.returnItinerary} currency={currency} />
+                  <ItineraryCard
+                    {...sharedCardProps}
+                    it={p.returnItinerary}
+                    gfOrigins={p.gfDestinations}
+                    gfDestinations={p.gfOrigins}
+                    linkDate={p.returnDate}
+                    returnDate={null}
+                  />
                 </div>
               </div>
 
@@ -114,12 +119,12 @@ export function SavedRoundTripsList({ items, currency, onRemove }: Props) {
                   href={url}
                   target="_blank"
                   rel="noreferrer"
-                  title={deepUrl ? 'Pre-selected exact flights' : reliable ? undefined : 'Approximate — multi-origin/destination'}
+                  title={deepUrl ? 'Pre-selected exact flights (round trip)' : reliable ? undefined : 'Approximate — multi-origin/destination'}
                 >
-                  Google Flights{deepUrl ? ' ✓' : (!reliable ? ' (~)' : '')}
+                  Google Flights{deepUrl ? ' ✓' : (!reliable ? ' (~)' : '')} (round trip)
                 </a>
                 <button type="button" className="itin-action" onClick={() => void copyDetails()}>
-                  Copy details
+                  Copy both legs
                 </button>
                 <button
                   type="button"

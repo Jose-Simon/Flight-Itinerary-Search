@@ -2551,6 +2551,12 @@ export default function App() {
                   selectedReturnDate={pwReturnSelResolved?.date}
                   maxPrice={filterOut.maxPrice}
                   onSave={savePriceWindowSelection}
+                  tzByIata={tzByIata}
+                  displayTimezone={displayTimezone}
+                  airlineDirectory={airlinesDict}
+                  airlinesMeta={airlinesMetaJson as AirlinesMeta}
+                  layoverLongMinHours={settings.layoverLongMinHours}
+                  layoverShortMaxHours={settings.layoverShortMaxHours}
                 />
               )}
               {/* Outbound panel — shows itinerary picker for the currently selected outbound cell */}
@@ -2685,6 +2691,13 @@ export default function App() {
               items={savedRoundTrips}
               currency={settings.currency}
               onRemove={(sk) => void removeSavedResult('roundtrip', sk)}
+              tzByIata={tzByIata}
+              displayTimezone={displayTimezone}
+              airlineDirectory={airlinesDict}
+              airlinesMeta={airlinesMetaJson as AirlinesMeta}
+              namesByIata={namesByIata}
+              layoverLongMinHours={settings.layoverLongMinHours}
+              layoverShortMaxHours={settings.layoverShortMaxHours}
             />
             <ResultsList
               title="Saved outbound"
