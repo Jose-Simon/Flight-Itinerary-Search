@@ -3503,3 +3503,155 @@ button.pw-stat-col--med {
   color: var(--muted);
   opacity: 0.75;
 }
+
+/* ── Date heatmap panel ──────────────────────────────────────────────────── */
+.pw-heatmap-body {
+  padding: 0.75rem 0 0;
+}
+
+.pw-heatmap-route-field {
+  padding: 0 0.75rem 0.75rem;
+  max-width: 500px;
+}
+
+.pw-heatmap-grid-wrap {
+  overflow-x: auto;
+  overflow-y: auto;
+  max-height: 520px;
+  border-top: 1px solid var(--border);
+}
+
+.pw-heatmap-scroll {
+  display: inline-flex;
+  flex-direction: column;
+  min-width: 100%;
+}
+
+.pw-heatmap-row {
+  display: flex;
+  align-items: stretch;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+}
+.pw-heatmap-row:last-child { border-bottom: none; }
+
+/* Sticky header row */
+.pw-heatmap-header-row {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
+/* Corner cell (top-left) */
+.pw-heatmap-corner {
+  flex: 0 0 76px;
+  width: 76px;
+  min-width: 76px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  font-size: 0.58rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  background: var(--surface2);
+  position: sticky;
+  left: 0;
+  z-index: 3;
+  border-right: 1px solid rgba(255,255,255,0.08);
+  padding: 0.4rem 0.2rem;
+}
+
+/* Column headers (outbound dates) */
+.pw-heatmap-col-header {
+  flex: 0 0 76px;
+  width: 76px;
+  min-width: 76px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  font-size: 0.65rem;
+  font-weight: 500;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  padding: 0.4rem 0.25rem;
+  background: var(--surface2);
+  border-right: 1px solid rgba(255,255,255,0.04);
+}
+
+/* Row headers (return dates) — sticky left */
+.pw-heatmap-row-header {
+  flex: 0 0 76px;
+  width: 76px;
+  min-width: 76px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  font-size: 0.65rem;
+  font-weight: 500;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  padding: 0.4rem 0.25rem;
+  background: var(--surface2);
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  border-right: 1px solid rgba(255,255,255,0.08);
+}
+
+/* Price cells */
+.pw-heatmap-cell {
+  flex: 0 0 76px;
+  width: 76px;
+  min-width: 76px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.73rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: #fff;
+  padding: 0.35rem 0.2rem;
+  border-right: 1px solid rgba(0,0,0,0.12);
+  position: relative;
+  cursor: default;
+  text-align: center;
+}
+
+.pw-heatmap-empty {
+  color: var(--muted);
+  background: transparent !important;
+  font-weight: 400;
+  font-size: 0.7rem;
+  opacity: 0.5;
+  border-right: 1px solid rgba(255,255,255,0.04);
+}
+
+/* Cheapest cell: inset ring highlight */
+.pw-heatmap-cheapest {
+  box-shadow: inset 0 0 0 2px rgba(255,255,255,0.45);
+}
+
+.pw-heatmap-star {
+  font-size: 0.52rem;
+  line-height: 1;
+  position: absolute;
+  top: 3px;
+  right: 4px;
+  opacity: 0.85;
+}
+
+.pw-heatmap-dow {
+  font-size: 0.6rem;
+  font-weight: 500;
+  opacity: 0.75;
+}

@@ -52,6 +52,7 @@ import {
 import { mergePerDateUnique } from './lib/pipeline'
 import { buildPriceWindowResult, reverseRouteKey, type PriceWindowResult } from './lib/routeGrouping'
 import { PriceWindowPanel } from './components/PriceWindowPanel'
+import { DateHeatmapPanel } from './components/DateHeatmapPanel'
 import { buildSerpDownloadPayload, downloadJson } from './lib/serpDebugExport'
 import { passesTimeBucketFilter, type TimeOfDayBucket } from './lib/timeBuckets'
 import {
@@ -2744,6 +2745,15 @@ export default function App() {
                   onRouteSelect={setPwReturnSel}
                   controlledSelection={pwReturnSel}
                   maxPrice={filterRet.maxPrice}
+                />
+              )}
+              {/* Date heatmap — outbound × return date matrix for a selected route */}
+              {tripType === 'round' && pwOutResultFiltered && pwRetResultFiltered && (
+                <DateHeatmapPanel
+                  outResult={pwOutResultFiltered}
+                  retResult={pwRetResultFiltered}
+                  currency={settings.currency}
+                  namesByIata={namesByIata}
                 />
               )}
             </div>
