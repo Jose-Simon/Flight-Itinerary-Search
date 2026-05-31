@@ -1748,6 +1748,85 @@ export default function App() {
     [origins, destinations, returnDate, saveSavedResult],
   )
 
+  /**
+   * Outbound selection handler for Price Window panels.
+   * When the user picks a different outbound itinerary (incl. switching airlines via the
+   * drilldown Options list), automatically find the best matching return:
+   *   1. Same carrier on the reverse route (reverseRouteKey preserves carrier codes)
+   *   2. Prefer the same return date if it exists in the same-carrier route
+   *   3. Otherwise pick the cheapest date on that carrier's return route
+   *   4. If no same-carrier return exists, pick the cheapest overall return
+   */
+  const handleOutboundSelect = useCallback(
+    (sel: { routeKey: string; date: string; pickedIdx?: number; selectedItinerary?: NormalizedItinerary } | null) => {
+      setPwOutboundSel(sel)
+
+      if (!sel || !pwRetResultFiltered) return
+
+      const currentRetDate = pwReturnSel?.date ?? null
+      const revKey = reverseRouteKey(sel.routeKey)
+
+      let bestRouteKey: string | null = null
+      let bestDate: string | null = null
+      let bestIt: NormalizedItinerary | null = null
+      let bestPrice = Infinity
+
+      // Phase 1: same-carrier reverse route
+      const sameCarrierDateMap = pwRetResultFiltered.perRouteByDate.get(revKey)
+      if (sameCarrierDateMap) {
+        bestRouteKey = revKey
+        if (currentRetDate && sameCarrierDateMap.has(currentRetDate)) {
+          // Same carrier + same date — ideal match
+          const bucket = sameCarrierDateMap.get(currentRetDate)!
+          bestDate = currentRetDate
+          bestIt = bucket.bestItinerary
+          bestPrice = bucket.minPrice
+        } else {
+          // Same carrier, pick cheapest date
+          for (const [d, bucket] of sameCarrierDateMap) {
+            if (bucket.minPrice < bestPrice) {
+              bestPrice = bucket.minPrice
+              bestDate = d
+              bestIt = bucket.bestItinerary
+            }
+          }
+        }
+      }
+
+      // Phase 2: no same-carrier return — fall back to any route, prefer same date then cheapest
+      if (!bestIt) {
+        for (const [rk, dateMap] of pwRetResultFiltered.perRouteByDate) {
+          if (currentRetDate && dateMap.has(currentRetDate)) {
+            const bucket = dateMap.get(currentRetDate)!
+            if (bucket.minPrice < bestPrice) {
+              bestPrice = bucket.minPrice
+              bestDate = currentRetDate
+              bestIt = bucket.bestItinerary
+              bestRouteKey = rk
+            }
+          }
+        }
+        if (!bestIt) {
+          for (const [rk, dateMap] of pwRetResultFiltered.perRouteByDate) {
+            for (const [d, bucket] of dateMap) {
+              if (bucket.minPrice < bestPrice) {
+                bestPrice = bucket.minPrice
+                bestDate = d
+                bestIt = bucket.bestItinerary
+                bestRouteKey = rk
+              }
+            }
+          }
+        }
+      }
+
+      if (bestIt && bestDate && bestRouteKey) {
+        setPwReturnSel({ routeKey: bestRouteKey, date: bestDate, pickedIdx: 0, selectedItinerary: bestIt })
+      }
+    },
+    [pwRetResultFiltered, pwReturnSel?.date],
+  )
+
   /** Save outbound (+ optional return) picked from the Price Window to Saved Results. */
   const savePriceWindowSelection = useCallback(
     (
@@ -2589,7 +2668,7 @@ export default function App() {
                   title="Total round-trip by date"
                   namesByIata={namesByIata}
                   returnResult={pwRetResultFiltered}
-                  onRouteSelect={setPwOutboundSel}
+                  onRouteSelect={handleOutboundSelect}
                   controlledSelection={pwOutboundSel}
                   selectionOnly={true}
                   selectedReturnIt={pwReturnSelResolved?.it ?? null}
@@ -2612,7 +2691,7 @@ export default function App() {
                   title="Outbound by date"
                   namesByIata={namesByIata}
                   returnResult={null}
-                  onRouteSelect={setPwOutboundSel}
+                  onRouteSelect={handleOutboundSelect}
                   controlledSelection={pwOutboundSel}
                   selectedReturnIt={pwReturnSelResolved?.it ?? null}
                   selectedReturnDate={pwReturnSelResolved?.date}
