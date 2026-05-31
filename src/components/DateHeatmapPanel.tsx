@@ -85,26 +85,28 @@ export function DateHeatmapPanel({
 
   // Verifications come from SQLite via props
 
-  // Per-popover verify inputs (reset when cell changes)
-  const [verifyPrice, setVerifyPrice] = useState('')
-  const [verifyNote, setVerifyNote] = useState('')
-  useEffect(() => {
-    if (!hoverCell) return
-    const existing = verifications[vKey(routeKey, hoverCell.outDate, hoverCell.retDate)]
-    setVerifyPrice(existing ? String(existing.price) : '')
-    setVerifyNote(existing?.note ?? '')
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hoverCell?.outDate, hoverCell?.retDate, routeKey])
-
   // JSON import state
   const [importOpen, setImportOpen] = useState(false)
   const [importJson, setImportJson] = useState('')
   const [importMsg, setImportMsg] = useState('')
 
-  // Resolved route key
+  // Resolved route key — must be declared before any useEffect that lists it as a dependency
   const routeKey = outResult.routeKeyOrder.includes(selectedRouteKey)
     ? selectedRouteKey
     : (outResult.routeKeyOrder[0] ?? '')
+
+  // Per-popover verify inputs (reset when active cell changes; pre-fill if already verified)
+  const [verifyPrice, setVerifyPrice] = useState('')
+  const [verifyPaxDesc, setVerifyPaxDesc] = useState('')
+  const [verifyNote, setVerifyNote] = useState('')
+  useEffect(() => {
+    if (!hoverCell) return
+    const existing = verifications?.get(vKey(routeKey, hoverCell.outDate, hoverCell.retDate))
+    setVerifyPrice(existing ? String(existing.verifiedPrice) : '')
+    setVerifyPaxDesc(existing?.paxDesc ?? '')
+    setVerifyNote(existing?.note ?? '')
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hoverCell?.outDate, hoverCell?.retDate, routeKey])
 
   const retRouteKey = reverseRouteKey(routeKey)
   const outDateMap = outResult.perRouteByDate.get(routeKey)
