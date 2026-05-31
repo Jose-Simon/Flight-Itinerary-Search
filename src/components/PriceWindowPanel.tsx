@@ -37,11 +37,11 @@ function priceMedian(sorted: number[]): number | null {
 }
 
 function heatColor(price: number, minP: number, maxP: number): string {
-  if (maxP <= minP) return 'hsl(145,55%,30%)'
+  if (maxP <= minP) return 'hsl(145,62%,46%)'
   const t = Math.max(0, Math.min(1, (price - minP) / (maxP - minP)))
-  const hue = Math.round(145 - t * 145)
-  const light = Math.round(30 + (1 - t) * 10)
-  return `hsl(${hue},55%,${light}%)`
+  const hue = Math.round(145 - t * 145)   // 145 green → 0 red
+  const light = Math.round(26 + (1 - t) * 22) // 26% (expensive/dark) → 48% (cheap/vivid)
+  return `hsl(${hue},62%,${light}%)`
 }
 
 function formatMins(minutes: number): string {

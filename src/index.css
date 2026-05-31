@@ -3003,13 +3003,13 @@ button.pw-stat-col--med {
   background: var(--surface2) !important;
 }
 
+/* Sort indicator: inset bottom shadow so it never overrides heat-map backgrounds */
 .pw-stat-sorted {
-  background: color-mix(in srgb, var(--accent) 8%, var(--surface)) !important;
+  box-shadow: inset 0 -2px 0 var(--accent) !important;
 }
 
-/* Highlight data cells in active sort column */
 .pw-grid-route-row .pw-stat-col.pw-stat-sorted {
-  background: color-mix(in srgb, var(--accent) 6%, var(--surface)) !important;
+  box-shadow: inset 0 -2px 0 var(--accent) !important;
 }
 
 /* Label (first) column */
