@@ -157,6 +157,7 @@ export default function App() {
     updateCacheTtl,
     persistSearch,
     loadCached,
+    loadCachedByRoute,
     resetEntireDb,
     saveSerpApiSearchCapture,
     getSerpCaptureRows,
@@ -1296,14 +1297,40 @@ export default function App() {
       } as const
     }
 
+    /**
+     * Load a single price-window date from cache.
+     * Tries exact hash first; falls back to route-only match (ignores gl/hl/currency/etc.)
+     * Returns the itineraries and whether the fallback was used.
+     */
+    async function loadPwDate(
+      dir: 'outbound' | 'return',
+      origs: string[],
+      dests: string[],
+      date: string,
+    ): Promise<{ itineraries: NormalizedItinerary[]; usedFallback: boolean }> {
+      const exact = await loadCached(pwHashParts(dir, origs, dests, date))
+      if (exact?.length) return { itineraries: exact, usedFallback: false }
+      const fallback = await loadCachedByRoute({
+        direction: dir,
+        origins: origs,
+        destinations: dests,
+        centerDate: date,
+        flexDays: 0,
+        mockMode: settings.mockMode,
+      })
+      return { itineraries: fallback ?? [], usedFallback: (fallback?.length ?? 0) > 0 }
+    }
+
     try {
       // ── Database mode: load each date from SQLite cache ──────────────────
       if (searchSource === 'db') {
         const outDates = pwDateRange(outboundDate, outboundEnd)
         const outPerDate: PriceWindowPerDateEntry[] = []
+        let anyFallback = false
         for (const date of outDates) {
-          const cached = await loadCached(pwHashParts('outbound', origins, destinations, date))
-          outPerDate.push({ date, itineraries: cached ?? [] })
+          const { itineraries, usedFallback } = await loadPwDate('outbound', origins, destinations, date)
+          outPerDate.push({ date, itineraries })
+          if (usedFallback) anyFallback = true
         }
         if (!outPerDate.some((d) => d.itineraries.length > 0)) {
           setError('No cached price window data for outbound. Run Search API once with the same route and date window.')
@@ -1312,14 +1339,14 @@ export default function App() {
         setPwRawOutPerDate(outPerDate)
         setPwOutResult(buildPriceWindowResult(outPerDate))
         setRawOut(outPerDate.flatMap((d) => d.itineraries))
-        setCacheHint('Price window loaded from cache.')
 
         if (tripType === 'round') {
           const retDates = pwDateRange(returnDate, returnEnd)
           const retPerDate: PriceWindowPerDateEntry[] = []
           for (const date of retDates) {
-            const cached = await loadCached(pwHashParts('return', destinations, origins, date))
-            retPerDate.push({ date, itineraries: cached ?? [] })
+            const { itineraries, usedFallback } = await loadPwDate('return', destinations, origins, date)
+            retPerDate.push({ date, itineraries })
+            if (usedFallback) anyFallback = true
           }
           if (!retPerDate.some((d) => d.itineraries.length > 0)) {
             setError('No cached price window data for return leg.')
@@ -1329,6 +1356,12 @@ export default function App() {
           setPwRetResult(buildPriceWindowResult(retPerDate))
           setRawReturn(retPerDate.flatMap((d) => d.itineraries))
         }
+
+        setCacheHint(
+          anyFallback
+            ? 'Price window loaded from cache (settings like gl/currency may differ from when this was searched — re-run Search API to refresh).'
+            : 'Price window loaded from cache.',
+        )
         return
       }
 
@@ -1446,6 +1479,7 @@ export default function App() {
     searchSource,
     persistSearch,
     loadCached,
+    loadCachedByRoute,
     tzByIata,
     hashExtras,
     recordSearchHistory,

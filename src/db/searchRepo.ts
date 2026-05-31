@@ -129,6 +129,49 @@ export function storeSearchResults(
   }
 }
 
+/**
+ * Fallback lookup that matches on route + date only, ignoring settings
+ * (gl, hl, currency, deepSearch, showHidden).  Used when the exact hash
+ * misses — e.g. the user changed gl/currency since the API search ran.
+ * Returns null when no entry exists or the most recent one has expired.
+ */
+export function tryLoadCachedSearchByRoute(
+  db: Database,
+  parts: Pick<HashParts, 'direction' | 'origins' | 'destinations' | 'centerDate' | 'flexDays' | 'mockMode'>,
+): NormalizedItinerary[] | null {
+  const mock = parts.mockMode ? 1 : 0
+  const origins = [...parts.origins].sort().join(',')
+  const dests = [...parts.destinations].sort().join(',')
+  const ttl = getCacheTtlMs(db)
+  const now = Date.now()
+
+  const stmt = db.prepare(
+    `SELECT id, created_at FROM search_run
+     WHERE direction = ? AND origins = ? AND destinations = ?
+       AND center_date = ? AND flex_days = ? AND mock_mode = ?
+     ORDER BY created_at DESC LIMIT 1`,
+  )
+  stmt.bind([parts.direction, origins, dests, parts.centerDate, parts.flexDays, mock])
+  if (!stmt.step()) {
+    stmt.free()
+    return null
+  }
+  const row = stmt.getAsObject() as { id: number; created_at: number }
+  stmt.free()
+  if (now - Number(row.created_at) > ttl) return null
+
+  const runId = Number(row.id)
+  const q = db.prepare('SELECT raw_json FROM itinerary WHERE search_run_id = ? ORDER BY id')
+  q.bind([runId])
+  const out: NormalizedItinerary[] = []
+  while (q.step()) {
+    const j = (q.getAsObject() as { raw_json: string }).raw_json
+    try { out.push(JSON.parse(j) as NormalizedItinerary) } catch { /* skip */ }
+  }
+  q.free()
+  return out.length ? out : null
+}
+
 export function tryLoadCachedSearch(db: Database, parts: HashParts): NormalizedItinerary[] | null {
   const hash = computeSearchParamsHash(parts)
   const mock = parts.mockMode ? 1 : 0
