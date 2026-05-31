@@ -3509,9 +3509,36 @@ button.pw-stat-col--med {
   padding: 0.75rem 0 0;
 }
 
-.pw-heatmap-route-field {
+.pw-heatmap-controls-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 1rem;
   padding: 0 0.75rem 0.75rem;
-  max-width: 500px;
+}
+
+.pw-heatmap-route-field {
+  flex: 1 1 260px;
+  min-width: 200px;
+  max-width: 420px;
+  padding: 0;
+}
+
+.pw-heatmap-highlight-checks {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  padding-bottom: 2px;
+}
+
+.pw-heatmap-check-tier1 {
+  color: #fbbf24;
+  font-weight: 500;
+}
+
+.pw-heatmap-check-tier2 {
+  color: #86efac;
+  font-weight: 500;
 }
 
 .pw-heatmap-grid-wrap {
@@ -3639,6 +3666,36 @@ button.pw-stat-col--med {
 /* Cheapest cell: inset ring highlight */
 .pw-heatmap-cheapest {
   box-shadow: inset 0 0 0 2px rgba(255,255,255,0.45);
+}
+
+/* ── Highlight tiers ──────────────────────────────────────────────────────── */
+
+/* Tier 1 — within 2%: gold ring + glow */
+.pw-heatmap-cell--tier1 {
+  box-shadow: inset 0 0 0 2px #fbbf24, 0 0 6px rgba(251,191,36,0.5);
+  z-index: 1;
+}
+/* cheapest + tier1: gold wins over white */
+.pw-heatmap-cheapest.pw-heatmap-cell--tier1 {
+  box-shadow: inset 0 0 0 2px #fbbf24, 0 0 8px rgba(251,191,36,0.6);
+}
+
+/* Tier 2 — within 5%: subtle green ring */
+.pw-heatmap-cell--tier2 {
+  box-shadow: inset 0 0 0 1px #86efac;
+  opacity: 0.9;
+}
+
+/* Muted — outside the active threshold */
+.pw-heatmap-cell--muted {
+  filter: grayscale(0.65) brightness(0.45);
+  opacity: 0.38;
+}
+
+/* Hovered cell ring (shown above muted cells too) */
+.pw-heatmap-cell--muted.pw-heatmap-cell-hover {
+  filter: none;
+  opacity: 1;
 }
 
 .pw-heatmap-star {

@@ -73,10 +73,21 @@ type Props = {
   namesByIata: Map<string, string>
 }
 
+/** Returns the CSS class(es) for a price cell given the active highlight thresholds. */
+function cellTierClass(price: number, minP: number, show2: boolean, show5: boolean): string {
+  if (!show2 && !show5) return ''
+  const pctAbove = minP > 0 ? ((price - minP) / minP) * 100 : 0
+  if (show2 && pctAbove <= 2) return 'pw-heatmap-cell--tier1'
+  if (show5 && pctAbove <= 5) return 'pw-heatmap-cell--tier2'
+  return 'pw-heatmap-cell--muted'
+}
+
 export function DateHeatmapPanel({ outResult, retResult, currency }: Props) {
   const [selectedRouteKey, setSelectedRouteKey] = useState<string>(
     () => outResult.routeKeyOrder[0] ?? '',
   )
+  const [show2pct, setShow2pct] = useState(false)
+  const [show5pct, setShow5pct] = useState(false)
   const [hoverCell, setHoverCell] = useState<HoverCell | null>(null)
   const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -203,18 +214,39 @@ export function DateHeatmapPanel({ outResult, retResult, currency }: Props) {
       <summary className="search-section-summary">Date heatmap</summary>
       <div className="search-section-body pw-heatmap-body">
 
-        <label className="field pw-heatmap-route-field">
-          <span className="label">Route</span>
-          <select
-            className="input"
-            value={routeKey}
-            onChange={(e) => setSelectedRouteKey(e.target.value)}
-          >
-            {routeOptions.map((o) => (
-              <option key={o.value} value={o.value}>{o.label}</option>
-            ))}
-          </select>
-        </label>
+        <div className="pw-heatmap-controls-row">
+          <label className="field pw-heatmap-route-field">
+            <span className="label">Route</span>
+            <select
+              className="input"
+              value={routeKey}
+              onChange={(e) => setSelectedRouteKey(e.target.value)}
+            >
+              {routeOptions.map((o) => (
+                <option key={o.value} value={o.value}>{o.label}</option>
+              ))}
+            </select>
+          </label>
+          <div className="pw-heatmap-highlight-checks">
+            <span className="label muted small">Highlight</span>
+            <label className="check check-inline">
+              <input
+                type="checkbox"
+                checked={show2pct}
+                onChange={(e) => setShow2pct(e.target.checked)}
+              />
+              <span className="pw-heatmap-check-tier1">≤2% from cheapest</span>
+            </label>
+            <label className="check check-inline">
+              <input
+                type="checkbox"
+                checked={show5pct}
+                onChange={(e) => setShow5pct(e.target.checked)}
+              />
+              <span className="pw-heatmap-check-tier2">≤5% from cheapest</span>
+            </label>
+          </div>
+        </div>
 
         {!routeKey || !outDateMap ? (
           <p className="muted small">No data available.</p>
@@ -259,10 +291,16 @@ export function DateHeatmapPanel({ outResult, retResult, currency }: Props) {
                       if (price == null) {
                         return <div key={outDate} className="pw-heatmap-cell pw-heatmap-empty">—</div>
                       }
+                      const tier = cellTierClass(price, minP, show2pct, show5pct)
                       return (
                         <div
                           key={outDate}
-                          className={`pw-heatmap-cell${isCheapest ? ' pw-heatmap-cheapest' : ''}${isHovered ? ' pw-heatmap-cell-hover' : ''}`}
+                          className={[
+                            'pw-heatmap-cell',
+                            isCheapest ? 'pw-heatmap-cheapest' : '',
+                            isHovered ? 'pw-heatmap-cell-hover' : '',
+                            tier,
+                          ].filter(Boolean).join(' ')}
                           style={{ background: heatColor(price, minP, maxP) }}
                           onMouseEnter={(e) => handleCellEnter(outDate, retDate, e)}
                           onMouseLeave={handleCellLeave}
