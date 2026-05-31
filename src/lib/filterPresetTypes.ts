@@ -56,7 +56,7 @@ export type FilterPreset = {
 /**
  * All date/trip-type state that can be saved as a named preset.
  * Covers both routing-discovery (outboundDate + outboundEnd, returnDate + returnEnd)
- * and price-window (pwOut*/pwRet* ranges).
+ * and price-window (pwOut* / pwRet* ranges).
  */
 export type DateSnapshot = {
   tripType: 'oneway' | 'round'
