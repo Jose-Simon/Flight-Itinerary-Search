@@ -8,43 +8,64 @@ import {
   buildGoogleFlightsSearchUrl,
 } from '../lib/googleFlightsLink'
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
+// ── Price verification storage ────────────────────────────────────────────────
+
+type PriceVerification = {
+  price: number
+  currency: string
+  note: string
+  ts: number // unix ms
+}
+type VerificationMap = Record<string, PriceVerification>
+
+const V_STORAGE_KEY = 'pw-price-verifications'
+
+function loadVerifications(): VerificationMap {
+  try {
+    const s = localStorage.getItem(V_STORAGE_KEY)
+    return s ? (JSON.parse(s) as VerificationMap) : {}
+  } catch { return {} }
+}
+function saveVerifications(m: VerificationMap): void {
+  try { localStorage.setItem(V_STORAGE_KEY, JSON.stringify(m)) } catch {}
+}
+/** Stable key: routeKey + dates — double-colon separator avoids clash with single-pipe in routeKey */
+function vKey(routeKey: string, outDate: string, retDate: string): string {
+  return `${routeKey}::${outDate}::${retDate}`
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
 function shortDate(iso: string): string {
   const d = new Date(iso + 'T12:00:00Z')
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' })
 }
-
 function dayOfWeek(iso: string): string {
   const d = new Date(iso + 'T12:00:00Z')
   return d.toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' })
 }
-
 function formatMins(m: number): string {
-  const h = Math.floor(m / 60)
-  const mm = m % 60
+  const h = Math.floor(m / 60); const mm = m % 60
   return mm > 0 ? `${h}h ${mm}m` : `${h}h`
 }
-
 function heatColor(price: number, minP: number, maxP: number): string {
   if (maxP <= minP) return 'hsl(145,62%,46%)'
   const t = Math.max(0, Math.min(1, (price - minP) / (maxP - minP)))
-  const hue = Math.round(145 - t * 145)
-  const light = Math.round(26 + (1 - t) * 22)
-  return `hsl(${hue},62%,${light}%)`
+  return `hsl(${Math.round(145 - t * 145)},62%,${Math.round(26 + (1 - t) * 22)}%)`
 }
-
-function itinSummary(it: NormalizedItinerary): { flights: string; duration: string; layovers: string } {
-  const flights = it.segments
-    .map((s) => s.flightNumber)
-    .filter(Boolean)
-    .join(' + ')
-  const duration = formatMins(it.totalDurationMinutes)
-  const layovers = it.layovers
-    .filter((l) => !l.isTechnical)
-    .map((l) => `${l.airport} ${formatMins(l.durationMinutes)}`)
-    .join(', ')
-  return { flights, duration, layovers }
+function itinSummary(it: NormalizedItinerary) {
+  return {
+    flights: it.segments.map(s => s.flightNumber).filter(Boolean).join(' + '),
+    duration: formatMins(it.totalDurationMinutes),
+    layovers: it.layovers.filter(l => !l.isTechnical).map(l => `${l.airport} ${formatMins(l.durationMinutes)}`).join(', '),
+  }
+}
+function cellTierClass(price: number, minP: number, show2: boolean, show5: boolean): string {
+  if (!show2 && !show5) return ''
+  const pctAbove = minP > 0 ? ((price - minP) / minP) * 100 : 0
+  if (show2 && pctAbove <= 2) return 'pw-heatmap-cell--tier1'
+  if (show5 && pctAbove <= 5) return 'pw-heatmap-cell--tier2'
+  return 'pw-heatmap-cell--muted'
 }
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -54,14 +75,9 @@ type HoverCell = {
   retDate: string
   rect: { top: number; left: number; right: number; bottom: number }
 }
-
 type Combo = {
-  outIt: NormalizedItinerary
-  retIt: NormalizedItinerary
-  total: number
-  outPrice: number
-  retPrice: number
-  gfUrl: string
+  outIt: NormalizedItinerary; retIt: NormalizedItinerary
+  total: number; outPrice: number; retPrice: number; gfUrl: string
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
@@ -73,25 +89,52 @@ type Props = {
   namesByIata: Map<string, string>
 }
 
-/** Returns the CSS class(es) for a price cell given the active highlight thresholds. */
-function cellTierClass(price: number, minP: number, show2: boolean, show5: boolean): string {
-  if (!show2 && !show5) return ''
-  const pctAbove = minP > 0 ? ((price - minP) / minP) * 100 : 0
-  if (show2 && pctAbove <= 2) return 'pw-heatmap-cell--tier1'
-  if (show5 && pctAbove <= 5) return 'pw-heatmap-cell--tier2'
-  return 'pw-heatmap-cell--muted'
-}
-
 export function DateHeatmapPanel({ outResult, retResult, currency }: Props) {
   const [selectedRouteKey, setSelectedRouteKey] = useState<string>(
     () => outResult.routeKeyOrder[0] ?? '',
   )
   const [show2pct, setShow2pct] = useState(false)
   const [show5pct, setShow5pct] = useState(false)
+
+  // Active cell (click-to-open popover)
   const [hoverCell, setHoverCell] = useState<HoverCell | null>(null)
   const popoverRef = useRef<HTMLDivElement>(null)
 
-  // Keep route key valid when results change
+  // Verifications persisted in localStorage
+  const [verifications, setVerifications] = useState<VerificationMap>(loadVerifications)
+  const upsertVerification = useCallback((key: string, v: PriceVerification) => {
+    setVerifications(prev => {
+      const next = { ...prev, [key]: v }
+      saveVerifications(next)
+      return next
+    })
+  }, [])
+  const removeVerification = useCallback((key: string) => {
+    setVerifications(prev => {
+      const next = { ...prev }
+      delete next[key]
+      saveVerifications(next)
+      return next
+    })
+  }, [])
+
+  // Per-popover verify inputs (reset when cell changes)
+  const [verifyPrice, setVerifyPrice] = useState('')
+  const [verifyNote, setVerifyNote] = useState('')
+  useEffect(() => {
+    if (!hoverCell) return
+    const existing = verifications[vKey(routeKey, hoverCell.outDate, hoverCell.retDate)]
+    setVerifyPrice(existing ? String(existing.price) : '')
+    setVerifyNote(existing?.note ?? '')
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hoverCell?.outDate, hoverCell?.retDate, routeKey])
+
+  // JSON import state
+  const [importOpen, setImportOpen] = useState(false)
+  const [importJson, setImportJson] = useState('')
+  const [importMsg, setImportMsg] = useState('')
+
+  // Resolved route key
   const routeKey = outResult.routeKeyOrder.includes(selectedRouteKey)
     ? selectedRouteKey
     : (outResult.routeKeyOrder[0] ?? '')
@@ -102,68 +145,52 @@ export function DateHeatmapPanel({ outResult, retResult, currency }: Props) {
   const outDates = outResult.dates
   const retDates = retResult.dates
 
-  // Cross-join outbound × return dates into combined-price cells
+  // Combined price cells
   const { cells, minP, maxP, cheapestKey } = useMemo(() => {
-    let minP = Infinity
-    let maxP = -Infinity
-    let cheapestKey = ''
+    let minP = Infinity, maxP = -Infinity, cheapestKey = ''
     const cells = new Map<string, number>()
-
     for (const retDate of retDates) {
-      const retBucket = retDateMap?.get(retDate)
-      if (!retBucket) continue
+      const rb = retDateMap?.get(retDate); if (!rb) continue
       for (const outDate of outDates) {
         if (retDate <= outDate) continue
-        const outBucket = outDateMap?.get(outDate)
-        if (!outBucket) continue
-        const combined = outBucket.minPrice + retBucket.minPrice
+        const ob = outDateMap?.get(outDate); if (!ob) continue
+        const combined = ob.minPrice + rb.minPrice
         const key = `${outDate}|${retDate}`
         cells.set(key, combined)
         if (combined < minP) { minP = combined; cheapestKey = key }
         if (combined > maxP) maxP = combined
       }
     }
-
     return { cells, minP: minP === Infinity ? 0 : minP, maxP: maxP === -Infinity ? 0 : maxP, cheapestKey }
   }, [outDates, retDates, outDateMap, retDateMap])
 
-  // Top itinerary combinations for the currently active (clicked) cell
+  // Itinerary combos for active cell
   const hoveredCombos = useMemo((): Combo[] => {
     if (!hoverCell) return []
     const { outDate, retDate } = hoverCell
-    const outBucket = outDateMap?.get(outDate)
-    const retBucket = retDateMap?.get(retDate)
-    if (!outBucket || !retBucket) return []
-
-    const outIts = outBucket.allItineraries.slice(0, 4)
-    const retIts = retBucket.allItineraries.slice(0, 4)
+    const ob = outDateMap?.get(outDate); const rb = retDateMap?.get(retDate)
+    if (!ob || !rb) return []
     const combos: Combo[] = []
-
-    for (const outIt of outIts) {
-      for (const retIt of retIts) {
-        const outPrice = outIt.price
-        const retPrice = retIt.price
+    for (const outIt of ob.allItineraries.slice(0, 4)) {
+      for (const retIt of rb.allItineraries.slice(0, 4)) {
+        const outPrice = outIt.price; const retPrice = retIt.price
         if (outPrice == null || retPrice == null) continue
-
         const total = outPrice + retPrice
         const deepLink = buildGoogleFlightsDeepLink(outIt, outDate, retIt, retDate)
         const { url: searchUrl } = buildGoogleFlightsSearchUrl(
-          [outIt.segments[0]?.dep ?? ''],
-          [outIt.segments[outIt.segments.length - 1]?.arr ?? ''],
-          outDate,
-          retDate,
+          [outIt.segments[0]?.dep ?? ''], [outIt.segments[outIt.segments.length - 1]?.arr ?? ''],
+          outDate, retDate,
         )
         combos.push({ outIt, retIt, total, outPrice, retPrice, gfUrl: deepLink ?? searchUrl })
       }
     }
-
     return combos.sort((a, b) => a.total - b.total).slice(0, 6)
   }, [hoverCell, outDateMap, retDateMap])
 
-  // Click a cell: toggle popover open/closed for that cell
+  // Click handlers
   const handleCellClick = useCallback((outDate: string, retDate: string, e: React.MouseEvent) => {
     e.stopPropagation()
-    setHoverCell((prev) => {
+    setHoverCell(prev => {
       if (prev?.outDate === outDate && prev?.retDate === retDate) return null
       const el = e.currentTarget as HTMLElement
       const r = el.getBoundingClientRect()
@@ -171,43 +198,72 @@ export function DateHeatmapPanel({ outResult, retResult, currency }: Props) {
     })
   }, [])
 
-  // Close on click outside the popover or on Escape
+  // Close on click outside / Escape
   useEffect(() => {
     if (!hoverCell) return
     const onDocClick = (e: MouseEvent) => {
-      if (popoverRef.current && !popoverRef.current.contains(e.target as Node)) {
-        setHoverCell(null)
-      }
+      if (popoverRef.current && !popoverRef.current.contains(e.target as Node)) setHoverCell(null)
     }
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setHoverCell(null) }
     document.addEventListener('mousedown', onDocClick)
     window.addEventListener('keydown', onKey)
-    return () => {
-      document.removeEventListener('mousedown', onDocClick)
-      window.removeEventListener('keydown', onKey)
-    }
+    return () => { document.removeEventListener('mousedown', onDocClick); window.removeEventListener('keydown', onKey) }
   }, [hoverCell])
 
-  // Route dropdown options
-  const routeOptions = outResult.routeKeyOrder.map((rk) => {
-    const [waypoint, carriers = ''] = rk.split('|')
-    const path = waypoint.replace(/-/g, ' › ')
-    return { value: rk, label: carriers ? `${path} — ${carriers}` : path }
-  })
+  // Save verification from popover input
+  const handleSaveVerification = useCallback(() => {
+    if (!hoverCell) return
+    const p = Number(verifyPrice)
+    if (!Number.isFinite(p) || p <= 0) return
+    upsertVerification(vKey(routeKey, hoverCell.outDate, hoverCell.retDate), {
+      price: p, currency, note: verifyNote.trim(), ts: Date.now(),
+    })
+  }, [hoverCell, verifyPrice, verifyNote, routeKey, currency, upsertVerification])
 
-  // Popover position: prefer below the cell, flip above if too close to bottom
+  // Import JSON from other Claude chat
+  const handleImport = useCallback(() => {
+    setImportMsg('')
+    try {
+      type ImportRow = { out?: string; outDate?: string; ret?: string; retDate?: string; price: number; note?: string; currency?: string }
+      const rows = JSON.parse(importJson) as ImportRow[]
+      if (!Array.isArray(rows)) throw new Error('Expected a JSON array')
+      let count = 0
+      for (const row of rows) {
+        const outDate = row.out ?? row.outDate ?? ''
+        const retDate = row.ret ?? row.retDate ?? ''
+        if (!outDate || !retDate || !Number.isFinite(row.price)) continue
+        upsertVerification(vKey(routeKey, outDate, retDate), {
+          price: row.price,
+          currency: row.currency ?? currency,
+          note: row.note ?? '',
+          ts: Date.now(),
+        })
+        count++
+      }
+      setImportMsg(`✓ Imported ${count} verification${count === 1 ? '' : 's'} for current route.`)
+      setImportJson('')
+    } catch (e) {
+      setImportMsg(`Error: ${e instanceof Error ? e.message : 'Invalid JSON'}`)
+    }
+  }, [importJson, routeKey, currency, upsertVerification])
+
+  // Popover position
   const popoverStyle = useMemo((): React.CSSProperties => {
     if (!hoverCell) return { display: 'none' }
     const { rect } = hoverCell
     const viewH = window.innerHeight
-    const popH = 280 // estimated popover height
+    const popH = 340
     const spaceBelow = viewH - rect.bottom
-    const top = spaceBelow >= popH || spaceBelow >= viewH / 2
-      ? rect.bottom + 6
-      : rect.top - popH - 6
+    const top = spaceBelow >= popH || spaceBelow >= viewH / 2 ? rect.bottom + 6 : rect.top - popH - 6
     const left = Math.min(rect.left, window.innerWidth - 360)
     return { position: 'fixed', top, left: Math.max(8, left), zIndex: 9999 }
   }, [hoverCell])
+
+  // Route options
+  const routeOptions = outResult.routeKeyOrder.map((rk) => {
+    const [waypoint, carriers = ''] = rk.split('|')
+    return { value: rk, label: carriers ? `${waypoint.replace(/-/g, ' › ')} — ${carriers}` : waypoint.replace(/-/g, ' › ') }
+  })
 
   return (
     <details className="search-section pw-heatmap-panel" open>
@@ -217,36 +273,50 @@ export function DateHeatmapPanel({ outResult, retResult, currency }: Props) {
         <div className="pw-heatmap-controls-row">
           <label className="field pw-heatmap-route-field">
             <span className="label">Route</span>
-            <select
-              className="input"
-              value={routeKey}
-              onChange={(e) => setSelectedRouteKey(e.target.value)}
-            >
-              {routeOptions.map((o) => (
-                <option key={o.value} value={o.value}>{o.label}</option>
-              ))}
+            <select className="input" value={routeKey} onChange={e => setSelectedRouteKey(e.target.value)}>
+              {routeOptions.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
             </select>
           </label>
           <div className="pw-heatmap-highlight-checks">
             <span className="label muted small">Highlight</span>
             <label className="check check-inline">
-              <input
-                type="checkbox"
-                checked={show2pct}
-                onChange={(e) => setShow2pct(e.target.checked)}
-              />
+              <input type="checkbox" checked={show2pct} onChange={e => setShow2pct(e.target.checked)} />
               <span className="pw-heatmap-check-tier1">≤2% from cheapest</span>
             </label>
             <label className="check check-inline">
-              <input
-                type="checkbox"
-                checked={show5pct}
-                onChange={(e) => setShow5pct(e.target.checked)}
-              />
+              <input type="checkbox" checked={show5pct} onChange={e => setShow5pct(e.target.checked)} />
               <span className="pw-heatmap-check-tier2">≤5% from cheapest</span>
             </label>
           </div>
+          <button
+            type="button"
+            className="btn btn-ghost btn-small pw-heatmap-import-btn"
+            onClick={() => { setImportOpen(o => !o); setImportMsg('') }}
+          >
+            {importOpen ? 'Cancel import' : 'Import verified prices'}
+          </button>
         </div>
+
+        {/* JSON import panel */}
+        {importOpen && (
+          <div className="pw-heatmap-import-panel">
+            <p className="muted small">
+              Paste JSON from your other Claude chat. Applies to the currently selected route.<br />
+              Format: <code className="mono">{'[{"out":"2026-07-12","ret":"2026-09-06","price":3777,"note":"1A+2C Etihad connection"}]'}</code>
+            </p>
+            <textarea
+              className="textarea textarea-mono pw-heatmap-import-ta"
+              rows={3}
+              value={importJson}
+              onChange={e => setImportJson(e.target.value)}
+              placeholder='[{"out":"YYYY-MM-DD","ret":"YYYY-MM-DD","price":1234,"note":"..."}]'
+            />
+            <div className="pw-heatmap-import-actions">
+              <button type="button" className="btn btn-secondary btn-small" onClick={handleImport}>Import</button>
+              {importMsg && <span className={`small ${importMsg.startsWith('✓') ? '' : 'error-inline'}`}>{importMsg}</span>}
+            </div>
+          </div>
+        )}
 
         {!routeKey || !outDateMap ? (
           <p className="muted small">No data available.</p>
@@ -258,13 +328,10 @@ export function DateHeatmapPanel({ outResult, retResult, currency }: Props) {
           <div className="pw-heatmap-grid-wrap">
             <div className="pw-heatmap-scroll">
 
-              {/* Header row: outbound dates */}
+              {/* Column headers */}
               <div className="pw-heatmap-row pw-heatmap-header-row">
-                <div className="pw-heatmap-corner">
-                  <span>OUT →</span>
-                  <span>↓ RET</span>
-                </div>
-                {outDates.map((d) => (
+                <div className="pw-heatmap-corner"><span>OUT →</span><span>↓ RET</span></div>
+                {outDates.map(d => (
                   <div key={d} className="pw-heatmap-col-header">
                     <span className="pw-heatmap-dow">{dayOfWeek(d)}</span>
                     <span>{shortDate(d)}</span>
@@ -272,9 +339,9 @@ export function DateHeatmapPanel({ outResult, retResult, currency }: Props) {
                 ))}
               </div>
 
-              {/* Data rows: one per return date */}
-              {retDates.map((retDate) => {
-                const hasAny = outDates.some((od) => cells.has(`${od}|${retDate}`))
+              {/* Data rows */}
+              {retDates.map(retDate => {
+                const hasAny = outDates.some(od => cells.has(`${od}|${retDate}`))
                 if (!hasAny) return null
                 return (
                   <div key={retDate} className="pw-heatmap-row">
@@ -282,11 +349,12 @@ export function DateHeatmapPanel({ outResult, retResult, currency }: Props) {
                       <span className="pw-heatmap-dow">{dayOfWeek(retDate)}</span>
                       <span>{shortDate(retDate)}</span>
                     </div>
-                    {outDates.map((outDate) => {
-                      const key = `${outDate}|${retDate}`
-                      const price = cells.get(key)
-                      const isCheapest = key === cheapestKey
-                      const isHovered = hoverCell?.outDate === outDate && hoverCell?.retDate === retDate
+                    {outDates.map(outDate => {
+                      const cellKey = `${outDate}|${retDate}`
+                      const price = cells.get(cellKey)
+                      const isCheapest = cellKey === cheapestKey
+                      const isActive = hoverCell?.outDate === outDate && hoverCell?.retDate === retDate
+                      const verification = verifications[vKey(routeKey, outDate, retDate)]
 
                       if (price == null) {
                         return <div key={outDate} className="pw-heatmap-cell pw-heatmap-empty">—</div>
@@ -295,16 +363,12 @@ export function DateHeatmapPanel({ outResult, retResult, currency }: Props) {
                       return (
                         <div
                           key={outDate}
-                          className={[
-                            'pw-heatmap-cell',
-                            isCheapest ? 'pw-heatmap-cheapest' : '',
-                            isHovered ? 'pw-heatmap-cell-hover' : '',
-                            tier,
-                          ].filter(Boolean).join(' ')}
+                          className={['pw-heatmap-cell', isCheapest ? 'pw-heatmap-cheapest' : '', isActive ? 'pw-heatmap-cell-hover' : '', tier].filter(Boolean).join(' ')}
                           style={{ background: heatColor(price, minP, maxP) }}
-                          onClick={(e) => handleCellClick(outDate, retDate, e)}
+                          onClick={e => handleCellClick(outDate, retDate, e)}
                         >
                           {isCheapest && <span className="pw-heatmap-star">✦</span>}
+                          {verification && <span className="pw-heatmap-verified-badge" title={`Verified: ${formatPriceAmount(verification.price, verification.currency)}${verification.note ? ` · ${verification.note}` : ''}`}>✓</span>}
                           <span>{formatPriceAmount(price, currency)}</span>
                         </div>
                       )
@@ -317,30 +381,21 @@ export function DateHeatmapPanel({ outResult, retResult, currency }: Props) {
           </div>
         )}
 
-        {/* ── Hover popover ─────────────────────────────────────────────── */}
+        {/* Click popover */}
         {hoverCell && hoveredCombos.length > 0 && (
-          <div
-            ref={popoverRef}
-            className="pw-heatmap-popover"
-            style={popoverStyle}
-          >
+          <div ref={popoverRef} className="pw-heatmap-popover" style={popoverStyle}>
             <div className="pw-heatmap-pop-header">
               <span className="pw-heatmap-pop-dates">
                 Out: {shortDate(hoverCell.outDate)} · Ret: {shortDate(hoverCell.retDate)}
               </span>
               <span className="pw-heatmap-pop-hint">Click outside or Esc to close</span>
             </div>
+
+            {/* Itinerary combinations */}
             {hoveredCombos.map((combo, i) => {
-              const out = itinSummary(combo.outIt)
-              const ret = itinSummary(combo.retIt)
+              const out = itinSummary(combo.outIt); const ret = itinSummary(combo.retIt)
               return (
-                <a
-                  key={i}
-                  href={combo.gfUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="pw-heatmap-pop-row"
-                >
+                <a key={i} href={combo.gfUrl} target="_blank" rel="noopener noreferrer" className="pw-heatmap-pop-row">
                   <div className="pw-heatmap-pop-total">
                     {formatPriceAmount(combo.total, currency)}
                     <span className="pw-heatmap-pop-gf-icon">↗</span>
@@ -364,6 +419,54 @@ export function DateHeatmapPanel({ outResult, retResult, currency }: Props) {
                 </a>
               )
             })}
+
+            {/* Verified price section */}
+            <div className="pw-heatmap-pop-verify" onClick={e => e.stopPropagation()}>
+              {(() => {
+                const existing = verifications[vKey(routeKey, hoverCell.outDate, hoverCell.retDate)]
+                return (
+                  <>
+                    {existing && (
+                      <div className="pw-heatmap-pop-verify-existing">
+                        <span className="pw-heatmap-verified-badge pw-heatmap-verified-badge--inline">✓ Verified</span>
+                        <span className="pw-heatmap-pop-verify-price">{formatPriceAmount(existing.price, existing.currency)}</span>
+                        {existing.note && <span className="muted small">{existing.note}</span>}
+                      </div>
+                    )}
+                    <div className="pw-heatmap-pop-verify-inputs">
+                      <input
+                        type="number"
+                        className="input pw-heatmap-pop-verify-input"
+                        placeholder={existing ? 'Update price' : 'Verified price (e.g. 3777)'}
+                        value={verifyPrice}
+                        onChange={e => setVerifyPrice(e.target.value)}
+                      />
+                      <input
+                        type="text"
+                        className="input pw-heatmap-pop-verify-input"
+                        placeholder="Note (e.g. 1A+2C connection)"
+                        value={verifyNote}
+                        onChange={e => setVerifyNote(e.target.value)}
+                      />
+                      <div className="pw-heatmap-pop-verify-btns">
+                        <button type="button" className="btn btn-secondary btn-small" onClick={handleSaveVerification}>
+                          {existing ? 'Update' : 'Save verified'}
+                        </button>
+                        {existing && (
+                          <button
+                            type="button"
+                            className="btn btn-ghost btn-small"
+                            onClick={() => removeVerification(vKey(routeKey, hoverCell.outDate, hoverCell.retDate))}
+                          >
+                            Clear
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </>
+                )
+              })()}
+            </div>
           </div>
         )}
 

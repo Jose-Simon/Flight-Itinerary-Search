@@ -3713,9 +3713,48 @@ button.pw-stat-col--med {
   opacity: 0.75;
 }
 
-/* Hovered cell ring */
+/* Hovered/active cell ring */
 .pw-heatmap-cell-hover {
   box-shadow: inset 0 0 0 2px rgba(255,255,255,0.6);
+}
+
+/* Verified price badge — bottom-left corner of cell */
+.pw-heatmap-verified-badge {
+  position: absolute;
+  bottom: 2px;
+  left: 3px;
+  font-size: 0.55rem;
+  font-weight: 700;
+  color: #4ade80;
+  line-height: 1;
+  text-shadow: 0 0 4px rgba(0,0,0,0.6);
+}
+
+/* Import button alignment */
+.pw-heatmap-import-btn {
+  align-self: flex-end;
+  white-space: nowrap;
+  margin-bottom: 2px;
+}
+
+/* Import panel */
+.pw-heatmap-import-panel {
+  padding: 0.5rem 0.75rem 0.65rem;
+  background: rgba(255,255,255,0.03);
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 0.5rem;
+}
+.pw-heatmap-import-ta {
+  width: 100%;
+  margin-top: 0.4rem;
+  font-size: 0.72rem;
+}
+.pw-heatmap-import-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-top: 0.4rem;
 }
 
 /* ── Hover popover ─────────────────────────────────────────────────────────── */
@@ -3843,4 +3882,53 @@ button.pw-stat-col--med {
   font-variant-numeric: tabular-nums;
   color: var(--text);
   white-space: nowrap;
+}
+
+/* ── Verified price section (bottom of popover) ─────────────────────────── */
+.pw-heatmap-pop-verify {
+  border-top: 1px solid rgba(255,255,255,0.08);
+  padding: 0.5rem 0.65rem 0.55rem;
+  background: rgba(74,222,128,0.04);
+}
+
+.pw-heatmap-pop-verify-existing {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.4rem;
+}
+
+.pw-heatmap-verified-badge--inline {
+  position: static;
+  font-size: 0.68rem;
+  padding: 1px 5px;
+  background: rgba(74,222,128,0.18);
+  border-radius: 3px;
+  text-shadow: none;
+}
+
+.pw-heatmap-pop-verify-price {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  font-size: 0.85rem;
+  color: #4ade80;
+}
+
+.pw-heatmap-pop-verify-inputs {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.pw-heatmap-pop-verify-input {
+  font-size: 0.75rem;
+  padding: 0.3rem 0.5rem;
+  height: auto;
+}
+
+.pw-heatmap-pop-verify-btns {
+  display: flex;
+  gap: 0.4rem;
+  margin-top: 0.1rem;
 }
