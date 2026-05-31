@@ -6,12 +6,6 @@ export type HashParts = {
   flexDays: number
   maxSegments: number
   mockMode: boolean
-  /** SerpApi-shaping options that change results */
-  deepSearch: boolean
-  showHidden: boolean
-  gl: string
-  hl: string
-  currency: string
 }
 
 /** Stable cache key for API-equivalent searches. */
@@ -25,11 +19,6 @@ export function computeSearchParamsHash(p: HashParts): string {
     `f:${p.flexDays}`,
     `m:${p.maxSegments}`,
     `mock:${p.mockMode ? 1 : 0}`,
-    `ds:${p.deepSearch ? 1 : 0}`,
-    `sh:${p.showHidden ? 1 : 0}`,
-    `gl:${p.gl}`,
-    `hl:${p.hl}`,
-    `cu:${p.currency}`,
   ]
   return parts.join('|')
 }
