@@ -177,6 +177,10 @@ export function tryLoadCachedSearchByRoute(
  * search misses the exact hash, tries each origin and each destination individually
  * and merges the results.  Allows e.g. "MAA + TRV" to reuse caches built from
  * separate single-destination searches.
+ *
+ * Also handles the reverse case via tryLoadCachedSearchSupersetFallback: if the
+ * user previously searched JFK+EWR+PHL→MAA and now searches just JFK→MAA, the
+ * cached multi-origin run is reused and filtered to the requested subset.
  */
 export function tryLoadCachedSearchSplitFallback(
   db: Database,
@@ -186,43 +190,107 @@ export function tryLoadCachedSearchSplitFallback(
   const exact = tryLoadCachedSearch(db, parts)
   if (exact) return exact
 
-  // 2. Nothing to split if already single origin + single destination
-  if (parts.origins.length <= 1 && parts.destinations.length <= 1) return null
-
-  // 3. Sub-searches: split by each individual origin (holding destinations fixed)
-  //    and by each individual destination (holding origins fixed)
-  const subSearches: Array<Pick<HashParts, 'origins' | 'destinations'>> = []
-  if (parts.origins.length > 1) {
-    for (const o of parts.origins) {
-      subSearches.push({ origins: [o], destinations: parts.destinations })
+  // 2. Split fallback: multi-origin/dest → try each individually and merge
+  if (parts.origins.length > 1 || parts.destinations.length > 1) {
+    const subSearches: Array<Pick<HashParts, 'origins' | 'destinations'>> = []
+    if (parts.origins.length > 1) {
+      for (const o of parts.origins) {
+        subSearches.push({ origins: [o], destinations: parts.destinations })
+      }
     }
-  }
-  if (parts.destinations.length > 1) {
-    for (const d of parts.destinations) {
-      subSearches.push({ origins: parts.origins, destinations: [d] })
+    if (parts.destinations.length > 1) {
+      for (const d of parts.destinations) {
+        subSearches.push({ origins: parts.origins, destinations: [d] })
+      }
     }
-  }
 
-  const all: NormalizedItinerary[] = []
-  const seen = new Set<string>()
-  let found = false
+    const all: NormalizedItinerary[] = []
+    const seen = new Set<string>()
+    let found = false
 
-  for (const sub of subSearches) {
-    const results = tryLoadCachedSearch(db, { ...parts, ...sub })
-    if (results) {
-      found = true
-      for (const it of results) {
-        // Deduplicate on waypointKey + first segment departure time
-        const key = `${it.waypointKey}|${it.segments[0]?.depTime ?? ''}`
-        if (!seen.has(key)) {
-          seen.add(key)
-          all.push(it)
+    for (const sub of subSearches) {
+      const results = tryLoadCachedSearch(db, { ...parts, ...sub })
+      if (results) {
+        found = true
+        for (const it of results) {
+          const key = `${it.waypointKey}|${it.segments[0]?.depTime ?? ''}`
+          if (!seen.has(key)) { seen.add(key); all.push(it) }
         }
       }
     }
+
+    if (found && all.length > 0) return all
   }
 
-  return found && all.length > 0 ? all : null
+  // 3. Superset fallback: the requested airports are a subset of a previously cached run
+  //    e.g. searched JFK+EWR+PHL→MAA before; now searching just JFK→MAA
+  return tryLoadCachedSearchSupersetFallback(db, parts)
+}
+
+/**
+ * Finds a recent cached run whose origins ⊇ parts.origins AND destinations ⊇ parts.destinations,
+ * then filters the loaded itineraries to only those matching the requested airports.
+ * Handles the case where the user narrows a previously broad search (e.g. removes EWR/PHL).
+ */
+function tryLoadCachedSearchSupersetFallback(
+  db: Database,
+  parts: HashParts,
+): NormalizedItinerary[] | null {
+  const ttl = getCacheTtlMs(db)
+  const now = Date.now()
+  const mock = parts.mockMode ? 1 : 0
+
+  // Load recent candidate runs matching direction/dates/segments/mock within TTL
+  const stmt = db.prepare(
+    `SELECT id, origins, destinations FROM search_run
+     WHERE direction = ? AND mock_mode = ? AND center_date = ?
+       AND flex_days = ? AND max_segments = ? AND created_at >= ?
+     ORDER BY created_at DESC LIMIT 50`,
+  )
+  stmt.bind([parts.direction, mock, parts.centerDate, parts.flexDays, parts.maxSegments, now - ttl])
+  const rows: Array<{ id: number; origins: string; destinations: string }> = []
+  while (stmt.step()) {
+    rows.push(stmt.getAsObject() as { id: number; origins: string; destinations: string })
+  }
+  stmt.free()
+
+  const wantOrigins = new Set(parts.origins.map((s) => s.trim().toUpperCase()))
+  const wantDests = new Set(parts.destinations.map((s) => s.trim().toUpperCase()))
+
+  for (const row of rows) {
+    const cachedOrigins = new Set(row.origins.split(',').map((s) => s.trim().toUpperCase()))
+    const cachedDests = new Set(row.destinations.split(',').map((s) => s.trim().toUpperCase()))
+
+    // wantOrigins ⊆ cachedOrigins AND wantDests ⊆ cachedDests (must be a strict superset)
+    const originsOk = [...wantOrigins].every((o) => cachedOrigins.has(o))
+    const destsOk = [...wantDests].every((d) => cachedDests.has(d))
+    const isSuperset = cachedOrigins.size > wantOrigins.size || cachedDests.size > wantDests.size
+    if (!originsOk || !destsOk || !isSuperset) continue
+
+    // Load and filter itineraries to the requested origin/destination subset
+    const q = db.prepare('SELECT raw_json FROM itinerary WHERE search_run_id = ? ORDER BY id')
+    q.bind([Number(row.id)])
+    const filtered: NormalizedItinerary[] = []
+    while (q.step()) {
+      const j = (q.getAsObject() as { raw_json: string }).raw_json
+      try {
+        const it = JSON.parse(j) as NormalizedItinerary
+        const firstDep = it.segments[0]?.dep?.toUpperCase()
+        const lastArr = it.segments[it.segments.length - 1]?.arr?.toUpperCase()
+        if (
+          (!firstDep || wantOrigins.has(firstDep)) &&
+          (!lastArr || wantDests.has(lastArr))
+        ) {
+          filtered.push(it)
+        }
+      } catch { /* skip */ }
+    }
+    q.free()
+
+    if (filtered.length > 0) return filtered
+  }
+
+  return null
 }
 
 export function tryLoadCachedSearch(db: Database, parts: HashParts): NormalizedItinerary[] | null {
