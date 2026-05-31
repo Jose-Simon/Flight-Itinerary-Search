@@ -556,7 +556,12 @@ export function PriceWindowPanel({
                   {canShowRichCard && sharedCardProps ? (
                     <div className="srt-legs">
                       <div className="srt-leg">
-                        <span className="srt-leg-label">Outbound · {shortDateWithDay(effSelection.date)}</span>
+                        <div className="srt-leg-header">
+                          <span className="srt-leg-label">Outbound · {shortDateWithDay(effSelection.date)}</span>
+                          {deepUrl && (
+                            <a href={deepUrl} target="_blank" rel="noopener noreferrer" className="srt-leg-gf-icon" title="Open round-trip in Google Flights">↗</a>
+                          )}
+                        </div>
                         <ItineraryCard
                           {...sharedCardProps}
                           it={pickedOutboundIt}
@@ -568,7 +573,12 @@ export function PriceWindowPanel({
                       </div>
                       {bestRetIt ? (
                         <div className="srt-leg srt-leg--return">
-                          <span className="srt-leg-label">Return · {shortDateWithDay(bestRetDate)}</span>
+                          <div className="srt-leg-header">
+                            <span className="srt-leg-label">Return · {shortDateWithDay(bestRetDate)}</span>
+                            {deepUrl && (
+                              <a href={deepUrl} target="_blank" rel="noopener noreferrer" className="srt-leg-gf-icon" title="Open round-trip in Google Flights">↗</a>
+                            )}
+                          </div>
                           <ItineraryCard
                             {...sharedCardProps}
                             it={bestRetIt}
@@ -920,6 +930,7 @@ export function PriceWindowPanel({
             const outDate = effSelection.date
             const allOut = selectedRouteBucket.allItineraries
             const pickedIdx = effSelection.pickedIdx
+            const routeAirports = effSelection.routeKey.split('|')[0].split('-')
 
             const { bestRetIt, bestRetDate, url, deepUrl, reliable, copyDetails } =
               buildDetailContext(outIt, outDate)
@@ -960,16 +971,36 @@ export function PriceWindowPanel({
                   {allOut.length > 1 && <span className="pw-detail-count"> ({allOut.length})</span>}
                 </div>
                 <div className="pw-itin-list">
-                  {allOut.map((it, i) => (
-                    <button
-                      key={i}
-                      type="button"
-                      className={`pw-itin-option${i === pickedIdx ? ' pw-itin-option--active' : ''}`}
-                      onClick={() => pickItinerary(effSelection.routeKey, effSelection.date, i)}
-                    >
-                      <ItineraryCompact it={it} currency={currency} />
-                    </button>
-                  ))}
+                  {allOut.map((it, i) => {
+                    const optDeepUrl = buildGoogleFlightsDeepLink(it, outDate, bestRetIt, bestRetIt ? bestRetDate : null)
+                    const { url: optSearchUrl } = buildGoogleFlightsSearchUrl(
+                      [routeAirports[0]],
+                      [routeAirports[routeAirports.length - 1]],
+                      outDate,
+                      bestRetIt ? bestRetDate : null,
+                    )
+                    const optGfUrl = optDeepUrl ?? optSearchUrl
+                    return (
+                      <div key={i} className={`pw-itin-option-wrap${i === pickedIdx ? ' pw-itin-option--active' : ''}`}>
+                        <button
+                          type="button"
+                          className="pw-itin-option-body"
+                          onClick={() => pickItinerary(effSelection.routeKey, effSelection.date, i)}
+                          title="Select this itinerary"
+                        >
+                          <ItineraryCompact it={it} currency={currency} />
+                        </button>
+                        <a
+                          href={optGfUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="pw-itin-option-gf"
+                          title={optDeepUrl ? 'Open this flight in Google Flights (pre-selected)' : 'Search in Google Flights'}
+                          onClick={e => e.stopPropagation()}
+                        >↗</a>
+                      </div>
+                    )
+                  })}
                 </div>
               </div>
             )

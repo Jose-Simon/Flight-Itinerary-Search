@@ -2173,13 +2173,35 @@ a.itin-action {
   flex: 1 1 auto;
 }
 
+.srt-leg-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.1rem;
+}
+
 .srt-leg-label {
   font-size: 0.68rem;
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--muted);
-  margin-bottom: 0.1rem;
   display: block;
+}
+
+.srt-leg-gf-icon {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #60a5fa;
+  text-decoration: none;
+  padding: 0.1rem 0.35rem;
+  border-radius: 4px;
+  opacity: 0.75;
+  transition: opacity 0.12s, background 0.12s;
+  flex-shrink: 0;
+}
+.srt-leg-gf-icon:hover {
+  opacity: 1;
+  background: rgba(96,165,250,0.12);
 }
 
 .srt-itin {
@@ -3327,32 +3349,65 @@ button.pw-stat-col--med {
   margin-bottom: 0.5rem;
 }
 
-.pw-itin-option {
-  all: unset;
-  display: block;
-  width: 100%;
-  box-sizing: border-box;
-  padding: 0.5rem 0.65rem;
+/* Option row wrapper — carries border, active state, hover */
+.pw-itin-option-wrap {
+  display: flex;
+  align-items: stretch;
   border: 1px solid var(--border);
   border-radius: 6px;
   background: var(--surface);
-  cursor: pointer;
   transition: border-color 0.15s, background 0.15s;
+  overflow: hidden;
 }
 
-.pw-itin-option:hover {
+.pw-itin-option-wrap:hover {
   border-color: var(--accent);
   background: var(--surface2);
 }
 
-.pw-itin-option--active {
+.pw-itin-option-wrap.pw-itin-option--active {
   border-color: var(--accent);
   background: color-mix(in srgb, var(--accent) 12%, var(--surface2));
 }
 
-.pw-itin-option--active .pw-itin-total {
+.pw-itin-option-wrap.pw-itin-option--active .pw-itin-total {
   color: var(--accent);
   font-weight: 600;
+}
+
+/* The selectable body — fills available space */
+.pw-itin-option-body {
+  all: unset;
+  display: block;
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 0.5rem 0.65rem;
+  cursor: pointer;
+  box-sizing: border-box;
+}
+
+/* GF link icon on the right */
+.pw-itin-option-gf {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 2.2rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #60a5fa;
+  text-decoration: none;
+  border-left: 1px solid var(--border);
+  background: transparent;
+  opacity: 0.6;
+  transition: opacity 0.12s, background 0.12s;
+}
+.pw-itin-option-wrap:hover .pw-itin-option-gf {
+  opacity: 1;
+}
+.pw-itin-option-gf:hover {
+  background: rgba(96,165,250,0.12);
+  opacity: 1;
 }
 
 .pw-detail-count {
