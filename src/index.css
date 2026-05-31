@@ -2983,6 +2983,11 @@ button.pw-stat-col {
   cursor: pointer;
 }
 
+/* Header-row stat buttons should match the date header background */
+.pw-grid-header-row button.pw-stat-col {
+  background: var(--surface2);
+}
+
 button.pw-stat-col--med {
   border-right: 2px solid var(--border);
 }
@@ -3097,7 +3102,13 @@ button.pw-stat-col--med {
 .pw-grid-global-row .pw-stat-col:not(.pw-stat-heat),
 .pw-grid-global-row .pw-date-col {
   background: color-mix(in srgb, var(--accent) 10%, var(--surface2));
-  border-bottom: 3px solid var(--border-strong);
+}
+
+/* Bottom separator on every cell in the All-routes row (including heat-colored stat cells) */
+.pw-grid-global-row .pw-label-col,
+.pw-grid-global-row .pw-stat-col,
+.pw-grid-global-row .pw-date-col {
+  border-bottom: 1px solid var(--border-strong);
 }
 
 .pw-price-cell {
