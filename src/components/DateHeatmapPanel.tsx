@@ -7,32 +7,8 @@ import {
   buildGoogleFlightsDeepLink,
   buildGoogleFlightsSearchUrl,
 } from '../lib/googleFlightsLink'
-
-// ── Price verification storage ────────────────────────────────────────────────
-
-type PriceVerification = {
-  price: number
-  currency: string
-  note: string
-  ts: number // unix ms
-}
-type VerificationMap = Record<string, PriceVerification>
-
-const V_STORAGE_KEY = 'pw-price-verifications'
-
-function loadVerifications(): VerificationMap {
-  try {
-    const s = localStorage.getItem(V_STORAGE_KEY)
-    return s ? (JSON.parse(s) as VerificationMap) : {}
-  } catch { return {} }
-}
-function saveVerifications(m: VerificationMap): void {
-  try { localStorage.setItem(V_STORAGE_KEY, JSON.stringify(m)) } catch {}
-}
-/** Stable key: routeKey + dates — double-colon separator avoids clash with single-pipe in routeKey */
-function vKey(routeKey: string, outDate: string, retDate: string): string {
-  return `${routeKey}::${outDate}::${retDate}`
-}
+import type { PriceVerificationRow } from '../db/priceVerificationRepo'
+import { vKey, importVerificationsFromJson } from '../db/priceVerificationRepo'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -87,9 +63,16 @@ type Props = {
   retResult: PriceWindowResult
   currency: string
   namesByIata: Map<string, string>
+  verifications?: Map<string, PriceVerificationRow>
+  onUpsertVerification?: (row: Omit<PriceVerificationRow, 'id' | 'updatedAt'>) => void | Promise<void>
+  onRemoveVerification?: (routeKey: string, outDate: string, retDate: string) => void | Promise<void>
+  onImportVerifications?: (json: string, fallbackRouteKey: string, fallbackCurrency: string) => Promise<{ count: number; errors: string[] }>
 }
 
-export function DateHeatmapPanel({ outResult, retResult, currency }: Props) {
+export function DateHeatmapPanel({
+  outResult, retResult, currency,
+  verifications, onUpsertVerification, onRemoveVerification, onImportVerifications,
+}: Props) {
   const [selectedRouteKey, setSelectedRouteKey] = useState<string>(
     () => outResult.routeKeyOrder[0] ?? '',
   )
@@ -100,23 +83,7 @@ export function DateHeatmapPanel({ outResult, retResult, currency }: Props) {
   const [hoverCell, setHoverCell] = useState<HoverCell | null>(null)
   const popoverRef = useRef<HTMLDivElement>(null)
 
-  // Verifications persisted in localStorage
-  const [verifications, setVerifications] = useState<VerificationMap>(loadVerifications)
-  const upsertVerification = useCallback((key: string, v: PriceVerification) => {
-    setVerifications(prev => {
-      const next = { ...prev, [key]: v }
-      saveVerifications(next)
-      return next
-    })
-  }, [])
-  const removeVerification = useCallback((key: string) => {
-    setVerifications(prev => {
-      const next = { ...prev }
-      delete next[key]
-      saveVerifications(next)
-      return next
-    })
-  }, [])
+  // Verifications come from SQLite via props
 
   // Per-popover verify inputs (reset when cell changes)
   const [verifyPrice, setVerifyPrice] = useState('')
@@ -212,40 +179,36 @@ export function DateHeatmapPanel({ outResult, retResult, currency }: Props) {
 
   // Save verification from popover input
   const handleSaveVerification = useCallback(() => {
-    if (!hoverCell) return
+    if (!hoverCell || !onUpsertVerification) return
     const p = Number(verifyPrice)
     if (!Number.isFinite(p) || p <= 0) return
-    upsertVerification(vKey(routeKey, hoverCell.outDate, hoverCell.retDate), {
-      price: p, currency, note: verifyNote.trim(), ts: Date.now(),
+    void onUpsertVerification({
+      routeKey, outDate: hoverCell.outDate, retDate: hoverCell.retDate,
+      verifiedPrice: p, currency, paxDesc: verifyNote.trim(), note: '',
     })
-  }, [hoverCell, verifyPrice, verifyNote, routeKey, currency, upsertVerification])
+  }, [hoverCell, verifyPrice, verifyNote, routeKey, currency, onUpsertVerification])
 
   // Import JSON from other Claude chat
-  const handleImport = useCallback(() => {
+  const handleImport = useCallback(async () => {
     setImportMsg('')
-    try {
-      type ImportRow = { out?: string; outDate?: string; ret?: string; retDate?: string; price: number; note?: string; currency?: string }
-      const rows = JSON.parse(importJson) as ImportRow[]
-      if (!Array.isArray(rows)) throw new Error('Expected a JSON array')
-      let count = 0
-      for (const row of rows) {
-        const outDate = row.out ?? row.outDate ?? ''
-        const retDate = row.ret ?? row.retDate ?? ''
-        if (!outDate || !retDate || !Number.isFinite(row.price)) continue
-        upsertVerification(vKey(routeKey, outDate, retDate), {
-          price: row.price,
-          currency: row.currency ?? currency,
-          note: row.note ?? '',
-          ts: Date.now(),
-        })
-        count++
+    if (!onImportVerifications) {
+      // Fallback: parse locally and call upsert one by one
+      try {
+        const result = importVerificationsFromJson({ run: () => {}, exec: () => [], prepare: () => ({ bind: () => {}, step: () => false, getAsObject: () => ({}), free: () => {} }) } as never, importJson, routeKey, currency)
+        setImportMsg(`✓ Imported ${result.count} row${result.count === 1 ? '' : 's'}.`)
+      } catch (e) {
+        setImportMsg(`Error: ${e instanceof Error ? e.message : 'Invalid JSON'}`)
       }
-      setImportMsg(`✓ Imported ${count} verification${count === 1 ? '' : 's'} for current route.`)
-      setImportJson('')
-    } catch (e) {
-      setImportMsg(`Error: ${e instanceof Error ? e.message : 'Invalid JSON'}`)
+      return
     }
-  }, [importJson, routeKey, currency, upsertVerification])
+    const result = await onImportVerifications(importJson, routeKey, currency)
+    if (result.count > 0) {
+      setImportMsg(`✓ Imported ${result.count} verification${result.count === 1 ? '' : 's'}.`)
+      setImportJson('')
+    } else {
+      setImportMsg(result.errors.length > 0 ? `Errors: ${result.errors.slice(0, 3).join('; ')}` : 'No valid rows found.')
+    }
+  }, [importJson, routeKey, currency, onImportVerifications])
 
   // Popover position
   const popoverStyle = useMemo((): React.CSSProperties => {
@@ -354,7 +317,7 @@ export function DateHeatmapPanel({ outResult, retResult, currency }: Props) {
                       const price = cells.get(cellKey)
                       const isCheapest = cellKey === cheapestKey
                       const isActive = hoverCell?.outDate === outDate && hoverCell?.retDate === retDate
-                      const verification = verifications[vKey(routeKey, outDate, retDate)]
+                      const verification = verifications?.get(vKey(routeKey, outDate, retDate))
 
                       if (price == null) {
                         return <div key={outDate} className="pw-heatmap-cell pw-heatmap-empty">—</div>
@@ -368,7 +331,7 @@ export function DateHeatmapPanel({ outResult, retResult, currency }: Props) {
                           onClick={e => handleCellClick(outDate, retDate, e)}
                         >
                           {isCheapest && <span className="pw-heatmap-star">✦</span>}
-                          {verification && <span className="pw-heatmap-verified-badge" title={`Verified: ${formatPriceAmount(verification.price, verification.currency)}${verification.note ? ` · ${verification.note}` : ''}`}>✓</span>}
+                          {verification && <span className="pw-heatmap-verified-badge" title={`Verified: ${formatPriceAmount(verification.verifiedPrice, verification.currency)}${verification.paxDesc ? ` · ${verification.paxDesc}` : ''}${verification.note ? ` · ${verification.note}` : ''}`}>✓</span>}
                           <span>{formatPriceAmount(price, currency)}</span>
                         </div>
                       )
@@ -423,14 +386,15 @@ export function DateHeatmapPanel({ outResult, retResult, currency }: Props) {
             {/* Verified price section */}
             <div className="pw-heatmap-pop-verify" onClick={e => e.stopPropagation()}>
               {(() => {
-                const existing = verifications[vKey(routeKey, hoverCell.outDate, hoverCell.retDate)]
+                const existing = verifications?.get(vKey(routeKey, hoverCell.outDate, hoverCell.retDate))
                 return (
                   <>
                     {existing && (
                       <div className="pw-heatmap-pop-verify-existing">
                         <span className="pw-heatmap-verified-badge pw-heatmap-verified-badge--inline">✓ Verified</span>
-                        <span className="pw-heatmap-pop-verify-price">{formatPriceAmount(existing.price, existing.currency)}</span>
-                        {existing.note && <span className="muted small">{existing.note}</span>}
+                        <span className="pw-heatmap-pop-verify-price">{formatPriceAmount(existing.verifiedPrice, existing.currency)}</span>
+                        {existing.paxDesc && <span className="muted small">{existing.paxDesc}</span>}
+                        {existing.note && <span className="muted small">· {existing.note}</span>}
                       </div>
                     )}
                     <div className="pw-heatmap-pop-verify-inputs">
@@ -452,11 +416,11 @@ export function DateHeatmapPanel({ outResult, retResult, currency }: Props) {
                         <button type="button" className="btn btn-secondary btn-small" onClick={handleSaveVerification}>
                           {existing ? 'Update' : 'Save verified'}
                         </button>
-                        {existing && (
+                        {existing && onRemoveVerification && (
                           <button
                             type="button"
                             className="btn btn-ghost btn-small"
-                            onClick={() => removeVerification(vKey(routeKey, hoverCell.outDate, hoverCell.retDate))}
+                            onClick={() => void onRemoveVerification(routeKey, hoverCell.outDate, hoverCell.retDate)}
                           >
                             Clear
                           </button>

@@ -175,6 +175,10 @@ export default function App() {
     removeSavedSearch,
     loadDefaultSavedSearchPayload,
     saveDefaultSavedSearch,
+    priceVerifications,
+    upsertVerification,
+    removeVerification,
+    importVerifications,
   } = useFlightDb()
 
   const [mainTab, setMainTab] = useState<'search' | 'savedSearches' | 'savedResults'>('search')
@@ -2716,6 +2720,9 @@ export default function App() {
                   airlinesMeta={airlinesMetaJson as AirlinesMeta}
                   layoverLongMinHours={settings.layoverLongMinHours}
                   layoverShortMaxHours={settings.layoverShortMaxHours}
+                  verifications={priceVerifications}
+                  onUpsertVerification={(row) => void upsertVerification(row)}
+                  onRemoveVerification={(rk, od, rd) => void removeVerification(rk, od, rd)}
                 />
               )}
               {/* Outbound panel — shows itinerary picker for the currently selected outbound cell */}
@@ -2754,6 +2761,10 @@ export default function App() {
                   retResult={pwRetResultFiltered}
                   currency={settings.currency}
                   namesByIata={namesByIata}
+                  verifications={priceVerifications}
+                  onUpsertVerification={(row) => void upsertVerification(row)}
+                  onRemoveVerification={(rk, od, rd) => void removeVerification(rk, od, rd)}
+                  onImportVerifications={importVerifications}
                 />
               )}
             </div>

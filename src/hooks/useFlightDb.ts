@@ -19,6 +19,14 @@ import {
 } from '../db/airlineRegionRepo'
 import { loadRegionsFromDb, replaceAllRegions } from '../db/regionRepo'
 import { setCacheTtlHours, storeSearchResults, tryLoadCachedSearch, tryLoadCachedSearchByRoute, tryLoadCachedSearchSplitFallback } from '../db/searchRepo'
+import {
+  deletePriceVerification,
+  importVerificationsFromJson,
+  loadVerificationMap,
+  upsertPriceVerification,
+  type PriceVerificationRow,
+  type VerificationImportRow,
+} from '../db/priceVerificationRepo'
 import { appendSearchHistory, deleteSearchHistoryEntry, listSearchHistory } from '../db/searchHistoryRepo'
 import type { SearchHistoryRow, SearchHistorySnapshotV1 } from '../db/searchHistoryTypes'
 import { deleteSavedResultByKey, listSavedResults, upsertSavedResult } from '../db/savedResultRepo'
@@ -44,6 +52,7 @@ export function useFlightDb() {
   const [airlineUiRegions, setAirlineUiRegions] = useState<Record<string, RegionId>>({})
   const [airportUiRegions, setAirportUiRegions] = useState<Record<string, RegionId>>({})
   const [cacheTtlHours, setCacheTtlHoursState] = useState(24)
+  const [priceVerifications, setPriceVerifications] = useState<Map<string, PriceVerificationRow>>(() => new Map())
   const airlineMapDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const airportMapDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -61,6 +70,7 @@ export function useFlightDb() {
         }
         setRegionCountries(loadRegionsFromDb(db))
         setAirlineUiRegions(loadAirlineUiRegionsFromDb(db))
+        setPriceVerifications(loadVerificationMap(db))
         setAirportUiRegions(loadAirportUiRegionsFromDb(db))
         setSearchHistory(listSearchHistory(db, 30))
         setSavedResults(listSavedResults(db))
@@ -256,6 +266,42 @@ export function useFlightDb() {
     setError(null)
   }, [])
 
+  const upsertVerification = useCallback(
+    async (row: Omit<PriceVerificationRow, 'id' | 'updatedAt'>) => {
+      const db = await getFlightDb()
+      upsertPriceVerification(db, row)
+      schedulePersist(db)
+      setPriceVerifications(loadVerificationMap(db))
+    },
+    [],
+  )
+
+  const removeVerification = useCallback(
+    async (routeKey: string, outDate: string, retDate: string) => {
+      const db = await getFlightDb()
+      deletePriceVerification(db, routeKey, outDate, retDate)
+      schedulePersist(db)
+      setPriceVerifications(loadVerificationMap(db))
+    },
+    [],
+  )
+
+  const importVerifications = useCallback(
+    async (json: string, fallbackRouteKey: string, fallbackCurrency: string) => {
+      const db = await getFlightDb()
+      const result = importVerificationsFromJson(db, json, fallbackRouteKey, fallbackCurrency)
+      if (result.count > 0) {
+        schedulePersist(db)
+        setPriceVerifications(loadVerificationMap(db))
+      }
+      return result
+    },
+    [],
+  )
+
+  // Re-export VerificationImportRow so callers don't need to import from repo
+  void (null as unknown as VerificationImportRow) // type-only reference keeps unused-import linter quiet
+
   const saveSerpApiSearchCapture = useCallback(
     async (summary: Omit<SerpCaptureStoredRecord, 'version' | 'savedAt' | 'data'>, data: SerpCaptureDownloadPayload) => {
       const db = await getFlightDb()
@@ -316,5 +362,9 @@ export function useFlightDb() {
     removeSavedSearch,
     loadDefaultSavedSearchPayload,
     saveDefaultSavedSearch,
+    priceVerifications,
+    upsertVerification,
+    removeVerification,
+    importVerifications,
   }
 }

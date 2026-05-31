@@ -134,4 +134,22 @@ CREATE TABLE IF NOT EXISTS saved_search (
 );
 
 CREATE INDEX IF NOT EXISTS idx_saved_search_created ON saved_search(created_at);
+
+-- User-confirmed prices from Google Flights (or other sources).
+-- Stored against a specific route+outDate+retDate combination so they can be
+-- overlaid on both the Price Window grid and the Date Heatmap.
+CREATE TABLE IF NOT EXISTS price_verification (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  route_key TEXT NOT NULL,
+  out_date TEXT NOT NULL,
+  ret_date TEXT NOT NULL DEFAULT '',
+  verified_price REAL NOT NULL,
+  currency TEXT NOT NULL DEFAULT 'USD',
+  pax_desc TEXT NOT NULL DEFAULT '',
+  note TEXT NOT NULL DEFAULT '',
+  updated_at INTEGER NOT NULL,
+  UNIQUE(route_key, out_date, ret_date)
+);
+
+CREATE INDEX IF NOT EXISTS idx_price_verification_route ON price_verification(route_key, out_date);
 `

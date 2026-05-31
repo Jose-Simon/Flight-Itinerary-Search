@@ -10,6 +10,8 @@ import {
 } from '../lib/googleFlightsLink'
 import { ItineraryCard } from './ItineraryCard'
 import type { AirlinesMeta } from '../lib/airlineMetaLookup'
+import type { PriceVerificationRow } from '../db/priceVerificationRepo'
+import { vKey } from '../db/priceVerificationRepo'
 
 /** Internal state for uncontrolled mode only. */
 type CellSelection =
@@ -181,6 +183,10 @@ export type PriceWindowPanelProps = {
    * panels it caps the individual leg price.
    */
   maxPrice?: number | null
+  /** Price verifications keyed by vKey(routeKey, outDate, retDate). */
+  verifications?: Map<string, PriceVerificationRow>
+  onUpsertVerification?: (row: Omit<PriceVerificationRow, 'id' | 'updatedAt'>) => void | Promise<void>
+  onRemoveVerification?: (routeKey: string, outDate: string, retDate: string) => void | Promise<void>
 }
 
 const MAX_ROUTES_SHOWN = 30
@@ -206,12 +212,18 @@ export function PriceWindowPanel({
   airlinesMeta,
   layoverLongMinHours = 4,
   layoverShortMaxHours = 1,
+  verifications,
+  onUpsertVerification,
+  onRemoveVerification,
 }: PriceWindowPanelProps) {
   // Internal selection state — only used in uncontrolled mode (controlledSelection === undefined)
   const [selection, setSelection] = useState<CellSelection | null>(null)
   const [isOpen, setIsOpen] = useState(true)
   const [saveConfirm, setSaveConfirm] = useState(false)
   const saveConfirmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const [verifyPrice, setVerifyPrice] = useState('')
+  const [verifyPaxDesc, setVerifyPaxDesc] = useState('')
+  const [verifyNote, setVerifyNote] = useState('')
   type StatSort = 'default' | 'min-asc' | 'min-desc' | 'med-asc' | 'med-desc'
   const [statSort, setStatSort] = useState<StatSort>('default')
 
@@ -267,6 +279,15 @@ export function PriceWindowPanel({
     setSaveConfirm(false)
     if (saveConfirmTimerRef.current) clearTimeout(saveConfirmTimerRef.current)
   }, [effSelection?.routeKey, effSelection?.date])
+
+  // Reset verify inputs when selection changes; pre-fill if a verification already exists
+  useEffect(() => {
+    if (!effSelection || !selectedReturnDate) { setVerifyPrice(''); setVerifyPaxDesc(''); setVerifyNote(''); return }
+    const existing = verifications?.get(vKey(effSelection.routeKey, effSelection.date, selectedReturnDate))
+    setVerifyPrice(existing ? String(existing.verifiedPrice) : '')
+    setVerifyPaxDesc(existing?.paxDesc ?? '')
+    setVerifyNote(existing?.note ?? '')
+  }, [effSelection?.routeKey, effSelection?.date, selectedReturnDate, verifications])
 
   // ─── Return price maps ────────────────────────────────────────────────────
   const minReturnByRouteKey = new Map<string, number>()
@@ -413,6 +434,18 @@ export function PriceWindowPanel({
       .join(' › ')
     return { path, fullTitle, carriers }
   }
+
+  // ─── Verification badge set: "routeKey|outDate" pairs that have any verification ───
+  const verifiedCellSet = useMemo(() => {
+    const s = new Set<string>()
+    if (!verifications) return s
+    for (const key of verifications.keys()) {
+      // key format: routeKey::outDate::retDate — extract routeKey + outDate
+      const parts = key.split('::')
+      if (parts.length >= 2) s.add(`${parts[0]}|${parts[1]}`)
+    }
+    return s
+  }, [verifications])
 
   // ─── Detail panel data ────────────────────────────────────────────────────
   const selectedGlobalRoutes =
@@ -583,6 +616,78 @@ export function PriceWindowPanel({
                       </span>
                     </div>
                   )}
+
+                  {/* ── Verified price section ── */}
+                  {onUpsertVerification && bestRetDate && (() => {
+                    const vk = vKey(effSelection.routeKey, effSelection.date, bestRetDate)
+                    const existing = verifications?.get(vk)
+                    return (
+                      <div className="pw-sel-verify" onClick={e => e.stopPropagation()}>
+                        {existing && (
+                          <div className="pw-sel-verify-existing">
+                            <span className="pw-sel-verify-badge">✓ Verified</span>
+                            <strong className="pw-sel-verify-price">{formatPriceAmount(existing.verifiedPrice, existing.currency)}</strong>
+                            {existing.paxDesc && <span className="muted small">{existing.paxDesc}</span>}
+                            {existing.note && <span className="muted small">· {existing.note}</span>}
+                          </div>
+                        )}
+                        <div className="pw-sel-verify-inputs">
+                          <input
+                            type="number"
+                            className="input pw-sel-verify-input"
+                            placeholder={existing ? 'Update verified price' : 'Verified price (e.g. 3777)'}
+                            value={verifyPrice}
+                            onChange={e => setVerifyPrice(e.target.value)}
+                          />
+                          <input
+                            type="text"
+                            className="input pw-sel-verify-input"
+                            placeholder="Pax (e.g. 1A+2C)"
+                            value={verifyPaxDesc}
+                            onChange={e => setVerifyPaxDesc(e.target.value)}
+                          />
+                          <input
+                            type="text"
+                            className="input pw-sel-verify-input"
+                            placeholder="Note (optional)"
+                            value={verifyNote}
+                            onChange={e => setVerifyNote(e.target.value)}
+                          />
+                          <div className="pw-sel-verify-btns">
+                            <button
+                              type="button"
+                              className="btn btn-secondary btn-small"
+                              onClick={() => {
+                                const p = Number(verifyPrice)
+                                if (!Number.isFinite(p) || p <= 0) return
+                                void onUpsertVerification({
+                                  routeKey: effSelection.routeKey,
+                                  outDate: effSelection.date,
+                                  retDate: bestRetDate,
+                                  verifiedPrice: p,
+                                  currency,
+                                  paxDesc: verifyPaxDesc.trim(),
+                                  note: verifyNote.trim(),
+                                })
+                              }}
+                            >
+                              {existing ? 'Update verified' : 'Save verified price'}
+                            </button>
+                            {existing && onRemoveVerification && (
+                              <button
+                                type="button"
+                                className="btn btn-ghost btn-small"
+                                onClick={() => void onRemoveVerification(effSelection.routeKey, effSelection.date, bestRetDate)}
+                              >
+                                Clear
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    )
+                  })()}
+
                   <div className="pw-detail-actions">
                     <a
                       className="itin-action"
@@ -771,6 +876,7 @@ export function PriceWindowPanel({
                       tooltipText = `${shortDateWithDay(d)}: ${formatPriceAmount(combined, currency)}`
                     }
 
+                    const hasVerification = verifiedCellSet.has(`${routeKey}|${d}`)
                     return (
                       <button
                         key={d}
@@ -780,6 +886,7 @@ export function PriceWindowPanel({
                         onClick={() => toggleRoute(routeKey, d)}
                         title={tooltipText}
                       >
+                        {hasVerification && <span className="pw-cell-verified-badge">✓</span>}
                         {formatPriceAmount(combined, currency)}
                       </button>
                     )
