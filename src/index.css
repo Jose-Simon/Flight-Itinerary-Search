@@ -3655,3 +3655,135 @@ button.pw-stat-col--med {
   font-weight: 500;
   opacity: 0.75;
 }
+
+/* Hovered cell ring */
+.pw-heatmap-cell-hover {
+  box-shadow: inset 0 0 0 2px rgba(255,255,255,0.6);
+}
+
+/* ── Hover popover ─────────────────────────────────────────────────────────── */
+.pw-heatmap-popover {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.55);
+  width: 340px;
+  max-width: calc(100vw - 16px);
+  overflow: hidden;
+  font-size: 0.78rem;
+}
+
+.pw-heatmap-pop-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding: 0.45rem 0.65rem 0.35rem;
+  background: rgba(255,255,255,0.04);
+  border-bottom: 1px solid var(--border);
+  gap: 0.5rem;
+}
+
+.pw-heatmap-pop-dates {
+  font-weight: 600;
+  font-size: 0.75rem;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.pw-heatmap-pop-hint {
+  font-size: 0.62rem;
+  color: var(--muted);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* Each combo row is a clickable <a> */
+.pw-heatmap-pop-row {
+  display: block;
+  padding: 0.5rem 0.65rem;
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+  text-decoration: none;
+  color: var(--text);
+  transition: background 0.12s;
+  cursor: pointer;
+}
+.pw-heatmap-pop-row:last-child { border-bottom: none; }
+.pw-heatmap-pop-row:hover { background: rgba(255,255,255,0.06); }
+
+.pw-heatmap-pop-total {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 0.88rem;
+  font-weight: 700;
+  color: var(--text);
+  margin-bottom: 0.3rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.pw-heatmap-pop-gf-icon {
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: #60a5fa;
+  opacity: 0.85;
+}
+.pw-heatmap-pop-row:hover .pw-heatmap-pop-gf-icon {
+  opacity: 1;
+  text-decoration: underline;
+}
+
+.pw-heatmap-pop-legs {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.pw-heatmap-pop-leg {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+.pw-heatmap-pop-leg-label {
+  font-size: 0.6rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border-radius: 3px;
+  padding: 1px 4px;
+  line-height: 1.4;
+  flex-shrink: 0;
+}
+.pw-heatmap-pop-leg-label.out { background: rgba(96,165,250,0.2); color: #93c5fd; }
+.pw-heatmap-pop-leg-label.ret { background: rgba(167,139,250,0.2); color: #c4b5fd; }
+
+.pw-heatmap-pop-dur {
+  font-weight: 600;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.pw-heatmap-pop-layover {
+  color: var(--muted);
+  font-size: 0.68rem;
+  white-space: nowrap;
+}
+
+.pw-heatmap-pop-flights {
+  color: var(--muted);
+  font-size: 0.65rem;
+  font-family: ui-monospace, monospace;
+  white-space: nowrap;
+}
+
+.pw-heatmap-pop-price {
+  margin-left: auto;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  white-space: nowrap;
+}
