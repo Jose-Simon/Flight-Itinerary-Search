@@ -172,6 +172,59 @@ export function tryLoadCachedSearchByRoute(
   return out.length ? out : null
 }
 
+/**
+ * Like tryLoadCachedSearch but when a combined multi-origin or multi-destination
+ * search misses the exact hash, tries each origin and each destination individually
+ * and merges the results.  Allows e.g. "MAA + TRV" to reuse caches built from
+ * separate single-destination searches.
+ */
+export function tryLoadCachedSearchSplitFallback(
+  db: Database,
+  parts: HashParts,
+): NormalizedItinerary[] | null {
+  // 1. Exact match first
+  const exact = tryLoadCachedSearch(db, parts)
+  if (exact) return exact
+
+  // 2. Nothing to split if already single origin + single destination
+  if (parts.origins.length <= 1 && parts.destinations.length <= 1) return null
+
+  // 3. Sub-searches: split by each individual origin (holding destinations fixed)
+  //    and by each individual destination (holding origins fixed)
+  const subSearches: Array<Pick<HashParts, 'origins' | 'destinations'>> = []
+  if (parts.origins.length > 1) {
+    for (const o of parts.origins) {
+      subSearches.push({ origins: [o], destinations: parts.destinations })
+    }
+  }
+  if (parts.destinations.length > 1) {
+    for (const d of parts.destinations) {
+      subSearches.push({ origins: parts.origins, destinations: [d] })
+    }
+  }
+
+  const all: NormalizedItinerary[] = []
+  const seen = new Set<string>()
+  let found = false
+
+  for (const sub of subSearches) {
+    const results = tryLoadCachedSearch(db, { ...parts, ...sub })
+    if (results) {
+      found = true
+      for (const it of results) {
+        // Deduplicate on waypointKey + first segment departure time
+        const key = `${it.waypointKey}|${it.segments[0]?.depTime ?? ''}`
+        if (!seen.has(key)) {
+          seen.add(key)
+          all.push(it)
+        }
+      }
+    }
+  }
+
+  return found && all.length > 0 ? all : null
+}
+
 export function tryLoadCachedSearch(db: Database, parts: HashParts): NormalizedItinerary[] | null {
   const hash = computeSearchParamsHash(parts)
   const mock = parts.mockMode ? 1 : 0

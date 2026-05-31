@@ -18,7 +18,7 @@ import {
   replaceAllAirlineUiRegions,
 } from '../db/airlineRegionRepo'
 import { loadRegionsFromDb, replaceAllRegions } from '../db/regionRepo'
-import { setCacheTtlHours, storeSearchResults, tryLoadCachedSearch, tryLoadCachedSearchByRoute } from '../db/searchRepo'
+import { setCacheTtlHours, storeSearchResults, tryLoadCachedSearch, tryLoadCachedSearchByRoute, tryLoadCachedSearchSplitFallback } from '../db/searchRepo'
 import { appendSearchHistory, deleteSearchHistoryEntry, listSearchHistory } from '../db/searchHistoryRepo'
 import type { SearchHistoryRow, SearchHistorySnapshotV1 } from '../db/searchHistoryTypes'
 import { deleteSavedResultByKey, listSavedResults, upsertSavedResult } from '../db/savedResultRepo'
@@ -156,6 +156,11 @@ export function useFlightDb() {
     [],
   )
 
+  const loadCachedSplitFallback = useCallback(async (parts: HashParts) => {
+    const db = await getFlightDb()
+    return tryLoadCachedSearchSplitFallback(db, parts)
+  }, [])
+
   const refreshSearchHistory = useCallback(async () => {
     const db = await getFlightDb()
     setSearchHistory(listSearchHistory(db, 30))
@@ -278,6 +283,7 @@ export function useFlightDb() {
     persistSearch,
     loadCached,
     loadCachedByRoute,
+    loadCachedSplitFallback,
     resetEntireDb,
     saveSerpApiSearchCapture,
     getSerpCaptureRows,

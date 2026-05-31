@@ -157,6 +157,7 @@ export default function App() {
     updateCacheTtl,
     persistSearch,
     loadCached,
+    loadCachedSplitFallback,
     resetEntireDb,
     saveSerpApiSearchCapture,
     getSerpCaptureRows,
@@ -1038,13 +1039,13 @@ export default function App() {
           setError('Mock mode has no SQLite cache. Use Search API or disable mock mode in Settings.')
           return
         }
-        out = await loadCached(outParts)
+        out = await loadCachedSplitFallback(outParts)
         if (!out?.length) {
           // Fallback: try per-date cache rows (written by Price Window searches)
           const window = dateWindow(outParts.centerDate, outParts.flexDays)
           const perDateFallback: NormalizedItinerary[][] = []
           for (const date of window) {
-            const cached = await loadCached({ ...outParts, centerDate: date, flexDays: 0 })
+            const cached = await loadCachedSplitFallback({ ...outParts, centerDate: date, flexDays: 0 })
             if (cached?.length) perDateFallback.push(cached)
           }
           if (perDateFallback.length > 0) {
@@ -1103,13 +1104,13 @@ export default function App() {
         }
         let ret: NormalizedItinerary[] | null = null
         if (searchSource === 'db') {
-          ret = await loadCached(retParts)
+          ret = await loadCachedSplitFallback(retParts)
           if (!ret?.length) {
             // Fallback: try per-date cache rows (written by Price Window searches)
             const window = dateWindow(retParts.centerDate, retParts.flexDays)
             const perDateFallback: NormalizedItinerary[][] = []
             for (const date of window) {
-              const cached = await loadCached({ ...retParts, centerDate: date, flexDays: 0 })
+              const cached = await loadCachedSplitFallback({ ...retParts, centerDate: date, flexDays: 0 })
               if (cached?.length) perDateFallback.push(cached)
             }
             if (perDateFallback.length > 0) {
@@ -1229,6 +1230,7 @@ export default function App() {
     sortReturn,
     searchSource,
     loadCached,
+    loadCachedSplitFallback,
     persistSearch,
     saveSerpApiSearchCapture,
     tzByIata,
@@ -1294,7 +1296,7 @@ export default function App() {
         const outDates = pwDateRange(outboundDate, outboundEnd)
         const outPerDate: PriceWindowPerDateEntry[] = []
         for (const date of outDates) {
-          const itineraries = await loadCached(pwHashParts('outbound', origins, destinations, date)) ?? []
+          const itineraries = await loadCachedSplitFallback(pwHashParts('outbound', origins, destinations, date)) ?? []
           outPerDate.push({ date, itineraries })
         }
         if (!outPerDate.some((d) => d.itineraries.length > 0)) {
@@ -1309,7 +1311,7 @@ export default function App() {
           const retDates = pwDateRange(returnDate, returnEnd)
           const retPerDate: PriceWindowPerDateEntry[] = []
           for (const date of retDates) {
-            const itineraries = await loadCached(pwHashParts('return', destinations, origins, date)) ?? []
+            const itineraries = await loadCachedSplitFallback(pwHashParts('return', destinations, origins, date)) ?? []
             retPerDate.push({ date, itineraries })
           }
           if (!retPerDate.some((d) => d.itineraries.length > 0)) {
@@ -1450,6 +1452,7 @@ export default function App() {
     searchSource,
     persistSearch,
     loadCached,
+    loadCachedSplitFallback,
     tzByIata,
     recordSearchHistory,
   ])
