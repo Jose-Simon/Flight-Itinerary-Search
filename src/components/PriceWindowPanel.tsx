@@ -29,6 +29,15 @@ function shortDateWithDay(iso: string): string {
   return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC' })
 }
 
+/** Format a date as "09/01 (Tue)" — used in cell tooltips for return date options. */
+function shortRetDate(iso: string): string {
+  const d = new Date(iso + 'T12:00:00Z')
+  const mm = String(d.getUTCMonth() + 1).padStart(2, '0')
+  const dd = String(d.getUTCDate()).padStart(2, '0')
+  const dow = d.toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' })
+  return `${mm}/${dd} (${dow})`
+}
+
 /** Compute median from a pre-sorted numeric array (returns integer-rounded value). */
 function priceMedian(sorted: number[]): number | null {
   if (sorted.length === 0) return null
@@ -740,12 +749,27 @@ export function PriceWindowPanel({
                       return <div key={d} className="pw-date-col pw-empty-cell">—</div>
                     }
 
-                    const lowestReturn = returnResult
-                      ? minReturnByRouteKey.get(reverseRouteKey(routeKey)) ?? null
-                      : null
-                    const tooltipText = lowestReturn != null
-                      ? `${shortDateWithDay(d)}: ${formatPriceAmount(combined, currency)} (out ${formatPriceAmount(bucket.minPrice, currency)} + ret from ${formatPriceAmount(lowestReturn, currency)})`
-                      : `${shortDateWithDay(d)}: ${formatPriceAmount(combined, currency)}`
+                    // Tooltip: for round-trip panels show top-3 return date options with combined price
+                    const retDateMap = returnResult?.perRouteByDate.get(reverseRouteKey(routeKey))
+                    let tooltipText: string
+                    if (retDateMap && retDateMap.size > 0) {
+                      const top3 = [...retDateMap.entries()]
+                        .map(([retDate, retBucket]) => ({
+                          date: retDate,
+                          retPrice: retBucket.minPrice,
+                          combined: bucket.minPrice + retBucket.minPrice,
+                        }))
+                        .filter((o) => maxPrice == null || o.combined <= maxPrice)
+                        .sort((a, b) => a.combined - b.combined)
+                        .slice(0, 3)
+                      tooltipText = top3.length > 0
+                        ? top3.map((o) =>
+                            `${formatPriceAmount(o.combined, currency)} (ret: ${shortRetDate(o.date)} ${formatPriceAmount(o.retPrice, currency)})`
+                          ).join('\n')
+                        : `${shortDateWithDay(d)}: ${formatPriceAmount(combined, currency)}`
+                    } else {
+                      tooltipText = `${shortDateWithDay(d)}: ${formatPriceAmount(combined, currency)}`
+                    }
 
                     return (
                       <button
