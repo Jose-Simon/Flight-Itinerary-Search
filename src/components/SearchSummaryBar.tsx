@@ -24,7 +24,7 @@ type Props = {
 
 function formatShortDate(iso: string): string {
   const d = DateTime.fromISO(iso)
-  return d.isValid ? d.toFormat('LLL d') : iso
+  return d.isValid ? d.toFormat('EEE LLL d') : iso
 }
 
 function fmtMoney(n: number | null, currency: string): string {

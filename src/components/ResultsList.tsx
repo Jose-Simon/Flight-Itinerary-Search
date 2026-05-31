@@ -213,6 +213,7 @@ export function ResultsList({
   mapFocus,
 }: Props) {
   const [visibleCount, setVisibleCount] = useState(INITIAL_VISIBLE)
+  const [recentlySaved, setRecentlySaved] = useState<Set<string>>(new Set())
   const scrollRootRef = useRef<HTMLDivElement>(null)
   const scrollSentinelRef = useRef<HTMLDivElement>(null)
 
@@ -473,15 +474,29 @@ export function ResultsList({
                       />
                       {saveControls ? (
                         saveControls.savedKeys.has(schedKey) ? (
+                          <>
+                            {recentlySaved.has(schedKey) && <span className="itin-save-confirm">✓ Saved</span>}
+                            <button
+                              type="button"
+                              className="itin-action"
+                              onClick={() => saveControls.onRemove(schedKey)}
+                            >
+                              Remove
+                            </button>
+                          </>
+                        ) : (
                           <button
                             type="button"
                             className="itin-action"
-                            onClick={() => saveControls.onRemove(schedKey)}
+                            onClick={() => {
+                              saveControls.onSave(it)
+                              setRecentlySaved((prev) => new Set([...prev, schedKey]))
+                              setTimeout(
+                                () => setRecentlySaved((prev) => { const n = new Set(prev); n.delete(schedKey); return n }),
+                                2500,
+                              )
+                            }}
                           >
-                            Remove
-                          </button>
-                        ) : (
-                          <button type="button" className="itin-action" onClick={() => saveControls.onSave(it)}>
                             Save
                           </button>
                         )

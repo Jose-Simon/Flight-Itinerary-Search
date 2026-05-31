@@ -201,6 +201,8 @@ export function PriceWindowPanel({
   // Internal selection state — only used in uncontrolled mode (controlledSelection === undefined)
   const [selection, setSelection] = useState<CellSelection | null>(null)
   const [isOpen, setIsOpen] = useState(true)
+  const [saveConfirm, setSaveConfirm] = useState(false)
+  const saveConfirmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   type StatSort = 'default' | 'min-asc' | 'min-desc' | 'med-asc' | 'med-desc'
   const [statSort, setStatSort] = useState<StatSort>('default')
 
@@ -250,6 +252,12 @@ export function PriceWindowPanel({
     }
     return null
   }, [isControlled, controlledSelection, selection])
+
+  // Reset save confirmation whenever the selected itinerary changes
+  useEffect(() => {
+    setSaveConfirm(false)
+    if (saveConfirmTimerRef.current) clearTimeout(saveConfirmTimerRef.current)
+  }, [effSelection?.routeKey, effSelection?.date])
 
   // ─── Return price maps ────────────────────────────────────────────────────
   const minReturnByRouteKey = new Map<string, number>()
@@ -580,14 +588,23 @@ export function PriceWindowPanel({
                       Copy both legs
                     </button>
                     {onSave && (
-                      <button
-                        type="button"
-                        className="itin-action itin-action--save"
-                        onClick={() => onSave(pickedOutboundIt, effSelection.date, bestRetIt, bestRetIt ? bestRetDate : null)}
-                        title={bestRetIt ? 'Save outbound + return to Saved Results' : 'Save outbound to Saved Results'}
-                      >
-                        Save{bestRetIt ? ' both' : ''}
-                      </button>
+                      saveConfirm ? (
+                        <span className="itin-save-confirm">✓ Saved</span>
+                      ) : (
+                        <button
+                          type="button"
+                          className="itin-action itin-action--save"
+                          onClick={() => {
+                            onSave(pickedOutboundIt, effSelection.date, bestRetIt, bestRetIt ? bestRetDate : null)
+                            setSaveConfirm(true)
+                            if (saveConfirmTimerRef.current) clearTimeout(saveConfirmTimerRef.current)
+                            saveConfirmTimerRef.current = setTimeout(() => setSaveConfirm(false), 2500)
+                          }}
+                          title={bestRetIt ? 'Save outbound + return to Saved Results' : 'Save outbound to Saved Results'}
+                        >
+                          Save{bestRetIt ? ' both' : ''}
+                        </button>
+                      )
                     )}
                   </div>
                 </>
@@ -632,7 +649,10 @@ export function PriceWindowPanel({
                 Med{statSort === 'med-asc' ? ' ↑' : statSort === 'med-desc' ? ' ↓' : ''}
               </button>
               {dates.map((d) => (
-                <div key={d} className="pw-date-col pw-date-header">{shortDate(d)}</div>
+                <div key={d} className="pw-date-col pw-date-header">
+                  <span className="pw-date-dow">{new Date(d + 'T12:00:00Z').toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' })}</span>
+                  <span>{shortDate(d)}</span>
+                </div>
               ))}
             </div>
 
@@ -669,7 +689,7 @@ export function PriceWindowPanel({
                         className={`pw-date-col pw-price-cell${isActive ? ' pw-cell-active' : ''}`}
                         style={{ background: heatColor(p, minP, maxP) }}
                         onClick={() => toggleGlobal(d)}
-                        title={`${shortDate(d)}: ${formatPriceAmount(p, currency)}`}
+                        title={`${shortDateWithDay(d)}: ${formatPriceAmount(p, currency)}`}
                       >
                         {formatPriceAmount(p, currency)}
                       </button>
@@ -724,8 +744,8 @@ export function PriceWindowPanel({
                       ? minReturnByRouteKey.get(reverseRouteKey(routeKey)) ?? null
                       : null
                     const tooltipText = lowestReturn != null
-                      ? `${shortDate(d)}: ${formatPriceAmount(combined, currency)} (out ${formatPriceAmount(bucket.minPrice, currency)} + ret from ${formatPriceAmount(lowestReturn, currency)})`
-                      : `${shortDate(d)}: ${formatPriceAmount(combined, currency)}`
+                      ? `${shortDateWithDay(d)}: ${formatPriceAmount(combined, currency)} (out ${formatPriceAmount(bucket.minPrice, currency)} + ret from ${formatPriceAmount(lowestReturn, currency)})`
+                      : `${shortDateWithDay(d)}: ${formatPriceAmount(combined, currency)}`
 
                     return (
                       <button
@@ -752,7 +772,7 @@ export function PriceWindowPanel({
           {selection?.kind === 'global' && selectedGlobalRoutes != null && (
             <div className="pw-detail-panel">
               <div className="pw-detail-heading">
-                Top routes · {shortDate(selection.date)}
+                Top routes · {shortDateWithDay(selection.date)}
               </div>
               <GlobalDrilldown routes={selectedGlobalRoutes} currency={currency} />
             </div>
@@ -778,19 +798,28 @@ export function PriceWindowPanel({
                     Copy details
                   </button>
                   {onSave && (
-                    <button
-                      type="button"
-                      className="itin-action itin-action--save"
-                      onClick={() => onSave(outIt, outDate, bestRetIt, bestRetIt ? bestRetDate : null)}
-                      title={bestRetIt ? 'Save outbound + return to Saved Results' : 'Save outbound to Saved Results'}
-                    >
-                      Save{bestRetIt ? ' both' : ''}
-                    </button>
+                    saveConfirm ? (
+                      <span className="itin-save-confirm">✓ Saved</span>
+                    ) : (
+                      <button
+                        type="button"
+                        className="itin-action itin-action--save"
+                        onClick={() => {
+                          onSave(outIt, outDate, bestRetIt, bestRetIt ? bestRetDate : null)
+                          setSaveConfirm(true)
+                          if (saveConfirmTimerRef.current) clearTimeout(saveConfirmTimerRef.current)
+                          saveConfirmTimerRef.current = setTimeout(() => setSaveConfirm(false), 2500)
+                        }}
+                        title={bestRetIt ? 'Save outbound + return to Saved Results' : 'Save outbound to Saved Results'}
+                      >
+                        Save{bestRetIt ? ' both' : ''}
+                      </button>
+                    )
                   )}
                 </div>
 
                 <div className="pw-detail-heading">
-                  Options · {shortDate(outDate)}
+                  Options · {shortDateWithDay(outDate)}
                   {allOut.length > 1 && <span className="pw-detail-count"> ({allOut.length})</span>}
                 </div>
                 <div className="pw-itin-list">
