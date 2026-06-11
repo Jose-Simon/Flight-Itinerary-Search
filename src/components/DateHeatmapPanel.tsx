@@ -41,7 +41,6 @@ import {
 } from '../lib/priceOverrides'
 import {
   expansionBadgeLabel,
-  roundTripPairCellKey,
   type RoundTripPairDeepenState,
   type RoundTripPairMeta,
 } from '../lib/roundTripPairMeta'
@@ -1795,7 +1794,6 @@ export function DateHeatmapPanel({
 
         {/* Click popover */}
         {hoverCell && (() => {
-          const pairMeta = roundTripPairMeta?.get(roundTripPairCellKey(hoverCell.outDate, hoverCell.retDate))
           if (hoveredCombos.length === 0) return null
           const verifiedComboCount = hoveredCombos.filter(c =>
             lookupVerificationRow(verifications ?? new Map(), routeKey, c.outIt, c.retIt),

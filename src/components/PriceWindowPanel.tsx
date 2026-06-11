@@ -34,8 +34,6 @@ import {
   returnRouteKeysForOutbound,
 } from '../lib/roundTripPricing'
 import {
-  expansionBadgeLabel,
-  roundTripPairCellKey,
   type RoundTripPairDeepenState,
   type RoundTripPairMeta,
 } from '../lib/roundTripPairMeta'
@@ -789,10 +787,7 @@ export function PriceWindowPanel({
     return null
   }, [effSelection, isReturnLegPanel, pairedOutboundDate, returnResult, selectedReturnDate])
 
-  const selectedPairMeta = useMemo(() => {
-    if (!roundTripPairMeta || !deepenDatePair) return null
-    return roundTripPairMeta.get(roundTripPairCellKey(deepenDatePair.outDate, deepenDatePair.retDate)) ?? null
-  }, [roundTripPairMeta, deepenDatePair])
+  // selectedPairMeta reserved for future use
 
   const combosForSelectedDatePair = useMemo(() => {
     if (!effSelection || !deepenDatePair || !roundTripCombos?.length) return []

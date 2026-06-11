@@ -50,7 +50,6 @@ export function HeatmapQualityFilterBar({
           const def = HEATMAP_QUALITY_DEFS[q]
           const on = activeFilter.has(q)
           const bucket = qualityTotals?.[q]
-          const count = bucket?.itineraries ?? null
           const countTitle = bucket ? qualityBucketCountTitle(bucket, q) : def.title
           return (
             <li key={q}>

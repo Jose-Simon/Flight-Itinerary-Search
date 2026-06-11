@@ -137,7 +137,7 @@ function getItinLogos(
     if (!code || seen.has(code)) continue
     seen.add(code)
     const enriched = enrichAirlineFromMeta(code, airlinesMeta, airlineDirectory)
-    result.push({ code, logoUrl: segmentAirlineLogoFromEnriched(seg, enriched), name: enriched?.name ?? code })
+    result.push({ code, logoUrl: segmentAirlineLogoFromEnriched(seg, enriched), name: enriched?.displayName ?? code })
   }
   return result
 }
@@ -201,24 +201,6 @@ function LabeledSegBar({ it }: { it: NormalizedItinerary }) {
           <span className="rv-segbar-top">{c.top}</span>
           <span className="rv-segbar-bot">{c.bot}</span>
         </div>
-      ))}
-    </div>
-  )
-}
-
-/** Small proportion-only bar for compact contexts. */
-function MiniSegBar({ it, height = 16 }: { it: NormalizedItinerary; height?: number }) {
-  const chunks: { kind: 'seg' | 'lay'; minutes: number; title: string }[] = []
-  for (let i = 0; i < it.segments.length; i++) {
-    const seg = it.segments[i]
-    chunks.push({ kind: 'seg', minutes: Math.max(1, seg.durationMinutes), title: `${seg.dep}→${seg.arr} · ${fmtMin(seg.durationMinutes)}` })
-    const lay = it.layovers[i]
-    if (lay) chunks.push({ kind: 'lay', minutes: Math.max(1, lay.durationMinutes), title: `Layover ${lay.airport} · ${fmtMin(lay.durationMinutes)}` })
-  }
-  return (
-    <div className="rv-miniseg" style={{ height }} aria-hidden>
-      {chunks.map((c, i) => (
-        <div key={i} className={`rv-miniseg-${c.kind}`} style={{ flex: c.minutes }} title={c.title} />
       ))}
     </div>
   )

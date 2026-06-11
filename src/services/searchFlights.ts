@@ -1626,7 +1626,6 @@ export async function runAirlineTargetedScan(
 
   const scanInput: PriceWindowSearchInput = {
     ...input,
-    targetAirlines: includedIata,
     includeAirlines: includedIata,
   }
 

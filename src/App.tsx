@@ -4047,7 +4047,7 @@ export default function App() {
       return o
     })
     setLayoverAirportOff(new Set())
-    setExcludeTechnical(false); setShowOpenJaw(true); setUniqueRoutesOnly(true)
+    setExcludeTechnical(false); setShowOpenJaw(true); setDedupeMode('route')
   }, [])
 
   if (!airports || !dbReady) {
@@ -5018,7 +5018,7 @@ export default function App() {
                     setLayoverAirportOff(new Set())
                     setExcludeTechnical(false)
                     setShowOpenJaw(true)
-                    setUniqueRoutesOnly(true)
+                    setDedupeMode('route')
                   }}>Reset</button>
                 </div>
                 <div className="dx-sec-body">

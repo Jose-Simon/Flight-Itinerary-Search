@@ -5,7 +5,6 @@ import { itineraryScheduleKey, totalFlightMinutes, type SortMode } from '../lib/
 import {
   calendarDayOffsetFromTripStart,
   formatDepartureDate,
-  formatFirstDepartureHeading,
   formatSegmentTimeline,
   formatTimesChain,
   tripStartDisplayAnchor,

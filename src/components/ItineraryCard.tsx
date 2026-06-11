@@ -5,7 +5,6 @@ import { totalFlightMinutes } from '../lib/filters'
 import {
   calendarDayOffsetFromTripStart,
   formatDepartureDate,
-  formatFirstDepartureHeading,
   formatSegmentTimeline,
   formatTimesChain,
   tripStartDisplayAnchor,
