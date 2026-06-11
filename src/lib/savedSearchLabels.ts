@@ -86,7 +86,7 @@ export function savedSearchDetailLinesFromPayload(p: SavedSearchPayloadV1): stri
     L.push(`Airlines excluded: ${p.airlineExcludedCodes.length}`)
   }
   L.push(
-    `Layover geography filter: ${p.layoverGeoFilterActive ? 'on' : 'off'} · Unique airport routes: ${p.uniqueRoutesOnly ? 'yes' : 'no'} · Technical stops: ${p.excludeTechnical ? 'excluded' : 'included'}${p.tripType === 'round' ? ` · Open jaw: ${p.showOpenJaw ? 'shown' : 'hidden'}` : ''}`,
+    `Layover geography filter: ${p.layoverGeoFilterActive ? 'on' : 'off'} · Dedup: ${p.dedupeMode ?? 'route'} · Technical stops: ${p.excludeTechnical ? 'excluded' : 'included'}${p.tripType === 'round' ? ` · Open jaw: ${p.showOpenJaw ? 'shown' : 'hidden'}` : ''}`,
   )
   L.push(
     `API prefs: ${p.settingsSearch.currency.toUpperCase()} · mock ${p.settingsSearch.mockMode ? 'on' : 'off'} · deep ${p.settingsSearch.deepSearch ? 'on' : 'off'} · hidden fares ${p.settingsSearch.showHidden ? 'on' : 'off'}`,

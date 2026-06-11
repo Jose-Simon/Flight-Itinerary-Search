@@ -37,12 +37,15 @@ export function isTechnicalLayover(
 export function normalizeSerpOption(
   opt: SerpFlightOption,
   ctx: {
-    primaryDestination?: string
+    /** Full set of searched destination airports — used for open-jaw detection. */
+    destinations?: string[]
     direction: 'outbound' | 'return'
-    /** Open-jaw flags apply only when user selected multiple destination airports. */
-    multipleDestinations?: boolean
     /** Industry open-jaw is a round-trip pattern (arrive one city, return from another). */
     roundTrip?: boolean
+    /** @deprecated use destinations[] instead */
+    primaryDestination?: string
+    /** @deprecated use destinations[] instead */
+    multipleDestinations?: boolean
   },
 ): NormalizedItinerary | null {
   const flights = opt.flights ?? []
@@ -77,15 +80,23 @@ export function normalizeSerpOption(
   const airlines = [...new Set(flights.map((f) => f.airline).filter(Boolean))] as string[]
 
   let openJaw = false
-  const md = ctx.multipleDestinations ?? false
   const rt = ctx.roundTrip === true
-  if (rt && ctx.direction === 'outbound' && ctx.primaryDestination && md) {
-    const last = segments[segments.length - 1]?.arr
-    if (last && last !== ctx.primaryDestination) openJaw = true
-  }
-  if (rt && ctx.direction === 'return' && ctx.primaryDestination && md) {
-    const first = segments[0]?.dep
-    if (first && first !== ctx.primaryDestination) openJaw = true
+  if (rt) {
+    // Build the effective destinations set: prefer new destinations[] array, fall back to legacy primaryDestination
+    const destSet = ctx.destinations && ctx.destinations.length > 0
+      ? new Set(ctx.destinations)
+      : ctx.primaryDestination
+        ? new Set([ctx.primaryDestination])
+        : null
+    if (destSet) {
+      if (ctx.direction === 'outbound') {
+        const last = segments[segments.length - 1]?.arr
+        if (last && !destSet.has(last)) openJaw = true
+      } else {
+        const first = segments[0]?.dep
+        if (first && !destSet.has(first)) openJaw = true
+      }
+    }
   }
 
   return {

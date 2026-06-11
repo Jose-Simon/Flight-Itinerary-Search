@@ -24,6 +24,8 @@ export type SearchHistorySnapshotV1 = {
   gl: string
   hl: string
   currency: string
+  adultCount?: number
+  childrenCount?: number
 }
 
 export type SearchHistoryRow = {

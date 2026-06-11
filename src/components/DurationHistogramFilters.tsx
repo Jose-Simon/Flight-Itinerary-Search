@@ -116,7 +116,7 @@ function DurationRow({
         <span className="duration-hist-title">{title}</span>
         <span className="duration-hist-range-label muted small">{rangeLabel}</span>
       </div>
-      <div className="duration-hist-chart" style={{ minWidth: `${Math.max(200, counts.length * 8)}px` }}>
+      <div className="duration-hist-chart">
         <div className="duration-hist-bars" role="img" aria-label={`${title} distribution, one hour per column`}>
           {counts.map((c, i) => {
             const binLo = lo + i

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { RegionId } from '../data/regions'
 import { cloneDefaultRegions } from '../data/regions'
-import { getFlightDb, schedulePersist, resetFlightDatabase } from '../db/flightDb'
+import { getFlightDb, persistNow, restoreFlightDatabaseFromBytes, schedulePersist, resetFlightDatabase } from '../db/flightDb'
 import {
   deleteSerpCapture,
   listSerpCaptures,
@@ -9,6 +9,7 @@ import {
   type SerpCaptureListRow,
   type SerpCaptureStoredRecord,
   saveSerpApiCapture,
+  type SerpCaptureSaveSummary,
 } from '../db/serpCaptureRepo'
 import type { SerpCaptureDownloadPayload } from '../lib/serpDebugExport'
 import { loadAirportUiRegionsFromDb, replaceAllAirportUiRegions } from '../db/airportRegionRepo'
@@ -18,19 +19,44 @@ import {
   replaceAllAirlineUiRegions,
 } from '../db/airlineRegionRepo'
 import { loadRegionsFromDb, replaceAllRegions } from '../db/regionRepo'
-import { setCacheTtlHours, storeSearchResults, tryLoadCachedSearch, tryLoadCachedSearchByRoute, tryLoadCachedSearchSplitFallback } from '../db/searchRepo'
+import {
+  roundTripCombosToItineraries,
+  setCacheTtlHours,
+  storeSearchResults,
+  tryLoadCachedSearch,
+  tryLoadCachedSearchByRoute,
+  tryLoadCachedSearchSplitFallback,
+} from '../db/searchRepo'
+import {
+  loadRtPairCache,
+  loadRtPairCacheBatchAsync,
+  saveRtPairCache,
+  rtPairCacheFreshness,
+  rtPairCacheRouteStats,
+  type RtPairCacheBase,
+  type RtPairCacheKey,
+} from '../db/rtPairCacheRepo'
+import { deepenStateToStored } from '../lib/storedRoundTripPair'
+import {
+  pairMetaFromInternal,
+  pairMetaMapFromList,
+  roundTripPairCellKey,
+  type RoundTripPairDeepenState,
+  type RoundTripPairMeta,
+} from '../lib/roundTripPairMeta'
 import {
   deletePriceVerification,
   importVerificationsFromJson,
   loadVerificationMap,
   upsertPriceVerification,
+  vKey,
   type PriceVerificationRow,
   type VerificationImportRow,
 } from '../db/priceVerificationRepo'
 import { appendSearchHistory, deleteSearchHistoryEntry, listSearchHistory } from '../db/searchHistoryRepo'
 import type { SearchHistoryRow, SearchHistorySnapshotV1 } from '../db/searchHistoryTypes'
 import { deleteSavedResultByKey, listSavedResults, upsertSavedResult } from '../db/savedResultRepo'
-import type { SavedResultLeg, SavedResultPayloadV1, SavedResultRow } from '../db/savedResultTypes'
+import type { SavedResultLeg, SavedResultPayload, SavedResultRow } from '../db/savedResultTypes'
 import {
   deleteSavedSearch,
   getDefaultSavedSearchPayload,
@@ -39,7 +65,7 @@ import {
   setDefaultSavedSearchPayload,
 } from '../db/savedSearchRepo'
 import type { SavedSearchPayloadV1, SavedSearchRow } from '../db/savedSearchTypes'
-import type { HashParts } from '../db/searchHash'
+import type { HashParts, SearchCacheParts } from '../db/searchHash'
 import type { NormalizedItinerary } from '../lib/types'
 
 export function useFlightDb() {
@@ -145,7 +171,7 @@ export function useFlightDb() {
   }, [])
 
   const persistSearch = useCallback(
-    async (parts: HashParts, items: NormalizedItinerary[], tzByIata: Map<string, string>) => {
+    async (parts: SearchCacheParts, items: NormalizedItinerary[], tzByIata: Map<string, string>) => {
       const db = await getFlightDb()
       storeSearchResults(db, parts, items, tzByIata)
       schedulePersist(db)
@@ -153,22 +179,109 @@ export function useFlightDb() {
     [],
   )
 
-  const loadCached = useCallback(async (parts: HashParts) => {
+  const loadCached = useCallback(async (parts: SearchCacheParts) => {
     const db = await getFlightDb()
     return tryLoadCachedSearch(db, parts)
   }, [])
 
   const loadCachedByRoute = useCallback(
-    async (parts: Pick<HashParts, 'direction' | 'origins' | 'destinations' | 'centerDate' | 'flexDays' | 'mockMode'>) => {
+    async (parts: Pick<HashParts, 'direction' | 'origins' | 'destinations' | 'centerDate' | 'flexDays' | 'mockMode'> & {
+      paxDesc?: string
+    }) => {
       const db = await getFlightDb()
       return tryLoadCachedSearchByRoute(db, parts)
     },
     [],
   )
 
-  const loadCachedSplitFallback = useCallback(async (parts: HashParts) => {
+  const loadCachedSplitFallback = useCallback(async (parts: SearchCacheParts) => {
     const db = await getFlightDb()
     return tryLoadCachedSearchSplitFallback(db, parts)
+  }, [])
+
+  const loadRtPairCacheEntry = useCallback(
+    async (key: RtPairCacheKey, opts?: { allowStale?: boolean }) => {
+      const db = await getFlightDb()
+      return loadRtPairCache(db, key, opts)
+    },
+    [],
+  )
+
+  const loadRtPairCacheBatchEntries = useCallback(
+    async (
+      base: RtPairCacheBase,
+      pairs: { outDate: string; retDate: string }[],
+      opts?: { allowStale?: boolean },
+    ) => {
+      const db = await getFlightDb()
+      return loadRtPairCacheBatchAsync(db, base, pairs, opts)
+    },
+    [],
+  )
+
+  const rtPairCacheStatus = useCallback(async (key: RtPairCacheKey) => {
+    const db = await getFlightDb()
+    return rtPairCacheFreshness(db, key)
+  }, [])
+
+  const persistRoundTripPairs = useCallback(
+    async (
+      base: RtPairCacheBase,
+      deepenStates: RoundTripPairDeepenState[],
+      pairMeta: RoundTripPairMeta[],
+      tzByIata: Map<string, string>,
+      opts?: { flushToDisk?: boolean; yieldEvery?: number },
+    ) => {
+      if (!deepenStates.length) return
+      const flushToDisk = opts?.flushToDisk !== false
+      const yieldEvery = opts?.yieldEvery ?? 20
+      const db = await getFlightDb()
+      const metaByCell = pairMetaMapFromList(pairMeta)
+      for (let i = 0; i < deepenStates.length; i++) {
+        const state = deepenStates[i]!
+        const meta =
+          metaByCell.get(roundTripPairCellKey(state.outDate, state.retDate)) ??
+          pairMetaFromInternal(state)
+        saveRtPairCache(
+          db,
+          { ...base, outDate: state.outDate, retDate: state.retDate },
+          deepenStateToStored(state, meta),
+        )
+        if (state.combos.length > 0) {
+          storeSearchResults(
+            db,
+            {
+              direction: 'roundTrip',
+              origins: base.origins,
+              destinations: base.destinations,
+              centerDate: state.outDate,
+              flexDays: 0,
+              maxSegments: base.maxSegments,
+              mockMode: base.mockMode,
+              returnDate: state.retDate,
+              paxDesc: base.paxDesc,
+            },
+            roundTripCombosToItineraries(state.combos),
+            tzByIata,
+          )
+        }
+        if (yieldEvery > 0 && i > 0 && i % yieldEvery === 0) {
+          await new Promise<void>((r) => setTimeout(r, 0))
+        }
+      }
+      if (flushToDisk) {
+        await new Promise<void>((r) => setTimeout(r, 0))
+        await persistNow(db)
+      } else {
+        schedulePersist(db)
+      }
+    },
+    [],
+  )
+
+  const rtPairCacheRouteStatsFor = useCallback(async (base: RtPairCacheBase) => {
+    const db = await getFlightDb()
+    return rtPairCacheRouteStats(db, base)
   }, [])
 
   const refreshSearchHistory = useCallback(async () => {
@@ -194,7 +307,7 @@ export function useFlightDb() {
   }, [])
 
   const saveSavedResult = useCallback(
-    async (leg: SavedResultLeg, scheduleKey: string, payload: SavedResultPayloadV1) => {
+    async (leg: SavedResultLeg, scheduleKey: string, payload: SavedResultPayload) => {
       const db = await getFlightDb()
       upsertSavedResult(db, leg, scheduleKey, payload)
       schedulePersist(db)
@@ -243,7 +356,7 @@ export function useFlightDb() {
   const downloadDb = useCallback(async () => {
     const db = await getFlightDb()
     const bytes = db.export()
-    const blob = new Blob([bytes], { type: 'application/x-sqlite3' })
+    const blob = new Blob([bytes as unknown as BlobPart], { type: 'application/x-sqlite3' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     const stamp = new Date().toISOString().slice(0, 19).replace(/[T:]/g, '-')
@@ -251,6 +364,21 @@ export function useFlightDb() {
     a.download = `flight-cache-${stamp}.sqlite`
     a.click()
     setTimeout(() => URL.revokeObjectURL(url), 10_000)
+  }, [])
+
+  const restoreDbFromFile = useCallback(async (file: File) => {
+    const buf = new Uint8Array(await file.arrayBuffer())
+    await restoreFlightDatabaseFromBytes(buf)
+    const db = await getFlightDb()
+    setRegionCountries(loadRegionsFromDb(db))
+    setAirlineUiRegions(loadAirlineUiRegionsFromDb(db))
+    setAirportUiRegions(loadAirportUiRegionsFromDb(db))
+    setSearchHistory(listSearchHistory(db, 30))
+    setSavedResults(listSavedResults(db))
+    setSavedSearches(listSavedSearches(db))
+    setPriceVerifications(loadVerificationMap(db))
+    setReady(true)
+    setError(null)
   }, [])
 
   const resetEntireDb = useCallback(async () => {
@@ -268,9 +396,30 @@ export function useFlightDb() {
 
   const upsertVerification = useCallback(
     async (row: Omit<PriceVerificationRow, 'id' | 'updatedAt'>) => {
+      // Optimistic UI update: reflect the new verified price immediately,
+      // then persist to SQLite and refresh the canonical map.
+      setPriceVerifications((prev) => {
+        const next = new Map(prev)
+        const key = vKey(row.routeKey, row.outDepTime ?? '', row.retDepTime ?? '')
+        next.set(key, {
+          id: -1,
+          routeKey: row.routeKey,
+          outDate: row.outDate,
+          retDate: row.retDate,
+          outDepTime: row.outDepTime ?? '',
+          retDepTime: row.retDepTime ?? '',
+          verifiedPrice: row.verifiedPrice,
+          cachedPrice: row.cachedPrice ?? null,
+          currency: row.currency,
+          paxDesc: row.paxDesc ?? '',
+          note: row.note ?? '',
+          updatedAt: Date.now(),
+        })
+        return next
+      })
       const db = await getFlightDb()
       upsertPriceVerification(db, row)
-      schedulePersist(db)
+      await persistNow(db)
       setPriceVerifications(loadVerificationMap(db))
     },
     [],
@@ -278,9 +427,15 @@ export function useFlightDb() {
 
   const removeVerification = useCallback(
     async (routeKey: string, outDepTime: string, retDepTime: string) => {
+      // Optimistic removal; refresh after DB write.
+      setPriceVerifications((prev) => {
+        const next = new Map(prev)
+        next.delete(vKey(routeKey, outDepTime ?? '', retDepTime ?? ''))
+        return next
+      })
       const db = await getFlightDb()
       deletePriceVerification(db, routeKey, outDepTime, retDepTime)
-      schedulePersist(db)
+      await persistNow(db)
       setPriceVerifications(loadVerificationMap(db))
     },
     [],
@@ -303,7 +458,7 @@ export function useFlightDb() {
   void (null as unknown as VerificationImportRow) // type-only reference keeps unused-import linter quiet
 
   const saveSerpApiSearchCapture = useCallback(
-    async (summary: Omit<SerpCaptureStoredRecord, 'version' | 'savedAt' | 'data'>, data: SerpCaptureDownloadPayload) => {
+    async (summary: SerpCaptureSaveSummary, data: SerpCaptureDownloadPayload) => {
       const db = await getFlightDb()
       saveSerpApiCapture(db, summary, data)
       schedulePersist(db)
@@ -343,7 +498,13 @@ export function useFlightDb() {
     loadCached,
     loadCachedByRoute,
     loadCachedSplitFallback,
+    loadRtPairCacheEntry,
+    loadRtPairCacheBatchEntries,
+    rtPairCacheStatus,
+    rtPairCacheRouteStatsFor,
+    persistRoundTripPairs,
     downloadDb,
+    restoreDbFromFile,
     resetEntireDb,
     saveSerpApiSearchCapture,
     getSerpCaptureRows,

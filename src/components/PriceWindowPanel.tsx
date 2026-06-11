@@ -1,6 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
-import type { PriceWindowResult, DateTopRoute } from '../lib/routeGrouping'
-import { reverseRouteKey } from '../lib/routeGrouping'
+﻿import { useEffect, useMemo, useRef, useState } from 'react'
+import type { PriceWindowResult, DateTopRoute, RouteDateBucket } from '../lib/routeGrouping'
 import { formatPriceAmount } from '../lib/formatPrice'
 import type { NormalizedItinerary, NormalizedSegment } from '../lib/types'
 import {
@@ -8,10 +7,48 @@ import {
   buildGoogleFlightsSearchUrl,
   itineraryDetailsText,
 } from '../lib/googleFlightsLink'
+import { dedupeByScheduleKey, itineraryScheduleKey } from '../lib/filters'
 import { ItineraryCard } from './ItineraryCard'
+import { RouteLabelCell } from './RouteLabelCell'
 import type { AirlinesMeta } from '../lib/airlineMetaLookup'
 import type { PriceVerificationRow } from '../db/priceVerificationRepo'
-import { vKey } from '../db/priceVerificationRepo'
+import {
+  legKeyDepTime,
+  legVerificationKey,
+  lookupVerificationRow,
+  parseVKey,
+  verificationPriceLabel,
+} from '../db/priceVerificationRepo'
+import {
+  minCombinedForDatePair,
+  minTokenPriceForScheduleOnPair,
+  minPriceForOutboundScheduleOnPair,
+  resolveRoundTripSelection,
+  type PriceOverrideMap,
+  type PriceWindowDateBounds,
+} from '../lib/priceOverrides'
+import { computePwPanelCellPrice } from '../lib/pwPanelCellPrice'
+import {
+  outboundItinerariesForCell,
+  returnItinerariesForCell,
+  returnRouteKeysForOutbound,
+} from '../lib/roundTripPricing'
+import {
+  expansionBadgeLabel,
+  roundTripPairCellKey,
+  type RoundTripPairDeepenState,
+  type RoundTripPairMeta,
+} from '../lib/roundTripPairMeta'
+import type { RoundTripCombo } from '../lib/roundTripTypes'
+import type { RtTokenPriceIndex } from '../lib/rtTokenRoutePrice'
+import {
+  HEATMAP_QUALITY_DEFS,
+  resolveOneWayRouteDateQuality,
+  resolveOutboundRouteDateQuality,
+  resolveReturnRouteDateQuality,
+  type HeatmapCellQuality,
+} from '../lib/heatmapCellQuality'
+import { HeatmapQualityBadge, heatmapQualityCellClass } from './HeatmapQualityFilter'
 
 /** Internal state for uncontrolled mode only. */
 type CellSelection =
@@ -29,15 +66,6 @@ function shortDate(iso: string): string {
 function shortDateWithDay(iso: string): string {
   const d = new Date(iso + 'T12:00:00Z')
   return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC' })
-}
-
-/** Format a date as "09/01 (Tue)" — used in cell tooltips for return date options. */
-function shortRetDate(iso: string): string {
-  const d = new Date(iso + 'T12:00:00Z')
-  const mm = String(d.getUTCMonth() + 1).padStart(2, '0')
-  const dd = String(d.getUTCDate()).padStart(2, '0')
-  const dow = d.toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' })
-  return `${mm}/${dd} (${dow})`
 }
 
 /** Compute median from a pre-sorted numeric array (returns integer-rounded value). */
@@ -81,7 +109,19 @@ function SegmentLine({ seg }: { seg: NormalizedSegment }) {
   )
 }
 
-function ItineraryCompact({ it, currency }: { it: NormalizedItinerary; currency: string }) {
+function ItineraryCompact({
+  it,
+  currency,
+  hidePrice = false,
+  displayPrice,
+}: {
+  it: NormalizedItinerary
+  currency: string
+  hidePrice?: boolean
+  /** When set, shown instead of it.price (e.g. bundled RT for active return date). */
+  displayPrice?: number | null
+}) {
+  const price = displayPrice ?? it.price
   return (
     <div className="pw-itin-compact">
       {it.segments.map((seg, i) => (
@@ -96,7 +136,7 @@ function ItineraryCompact({ it, currency }: { it: NormalizedItinerary; currency:
       ))}
       <div className="pw-itin-total">
         {formatMins(it.totalDurationMinutes)}
-        {it.price != null ? ` · ${formatPriceAmount(it.price, currency)}` : ''}
+        {!hidePrice && price != null ? ` · ${formatPriceAmount(price, currency)}` : ''}
       </div>
     </div>
   )
@@ -187,9 +227,65 @@ export type PriceWindowPanelProps = {
   verifications?: Map<string, PriceVerificationRow>
   onUpsertVerification?: (row: Omit<PriceVerificationRow, 'id' | 'updatedAt'>) => void | Promise<void>
   onRemoveVerification?: (routeKey: string, outDepTime: string, retDepTime: string) => void | Promise<void>
+  /** Passenger counts passed to Google Flights deep links. */
+  adults?: number
+  children?: number
+  /** Cabin class passed to Google Flights deep links: 1=Economy (default), 2=Premium Economy, 3=Business, 4=First */
+  cabinClass?: number
+  /** When set, combined cells use SerpApi round-trip bundled fares (not leg sums). */
+  roundTripCombos?: RoundTripCombo[] | null
+  /** Initial-scan prices per date pair (heatmap / shell grids). */
+  roundTripPairMeta?: Map<string, RoundTripPairMeta> | null
+  /** Ranked outbound options from RT scan (for cells without grid buckets). */
+  roundTripDeepenStates?: RoundTripPairDeepenState[] | null
+  /** Precomputed token prices (heatmap quality badges). */
+  rtTokenIndex?: RtTokenPriceIndex | null
+  /** Outbound-date index for ranked option lookup. */
+  deepenByOutDate?: Map<string, RoundTripPairDeepenState[]> | null
+  /** Return-date panel: outbound date axis for combined RT lookup. */
+  pairedOutboundResult?: PriceWindowResult | null
+  /** Return panel: selected outbound route (shows matching return paths + combo options). */
+  pairedOutboundRouteKey?: string | null
+  pairedOutboundDate?: string | null
+  pairedOutboundSelection?: {
+    routeKey: string
+    date: string
+    pickedIdx?: number
+    selectedItinerary?: NormalizedItinerary
+  } | null
+  /** Applied to outbound itineraries shown in OPTIONS (filters deepenState ranked candidates). */
+  outboundLegFilter?: ((it: NormalizedItinerary) => boolean) | null
+  /** Applied to return itineraries shown in OPTIONS. */
+  returnLegFilter?: ((it: NormalizedItinerary) => boolean) | null
+  /** Search calendar limits (return dates outside this range are excluded from cell + tooltip). */
+  dateBounds?: PriceWindowDateBounds | null
+  /** When non-empty, only matching quality cells stay vivid; others dim. */
+  qualityFilter?: ReadonlySet<HeatmapCellQuality>
+  /** selectionOnly: heading above itinerary summary (default "Selected itinerary"). */
+  summaryTitle?: string
+  /** selectionOnly: heading above the price grid (defaults to `title`). */
+  gridTitle?: string
+  /** Root `data-testid` for automated validation (e.g. pw-panel-total). */
+  panelTestId?: string
+  /**
+   * When true, the selectionOnly summary omits the return leg section entirely.
+   * Use for one-way price window panels where no return exists.
+   */
+  hideReturn?: boolean
+  /**
+   * Hide route rows whose implied stop count (derived from waypoint segments)
+   * is below this threshold. Mirrors the UI "STOPS MIN" filter at the row level
+   * so rows aren't shown as "—" placeholders when they can never pass the filter.
+   */
+  routeStopsMin?: number | null
+  /**
+   * Hide route rows whose implied stop count (derived from waypoint segments)
+   * exceeds this threshold. Mirrors the UI "STOPS MAX" filter at the row level
+   * so routes with too many stops are omitted entirely rather than shown with
+   * "—" or red placeholder cells.
+   */
+  routeStopsMax?: number | null
 }
-
-const MAX_ROUTES_SHOWN = 30
 
 export function PriceWindowPanel({
   result,
@@ -215,6 +311,28 @@ export function PriceWindowPanel({
   verifications,
   onUpsertVerification,
   onRemoveVerification,
+  adults = 1,
+  children = 0,
+  cabinClass = 1,
+  roundTripCombos = null,
+  roundTripPairMeta = null,
+  roundTripDeepenStates = null,
+  rtTokenIndex = null,
+  deepenByOutDate = null,
+  pairedOutboundResult = null,
+  pairedOutboundRouteKey = null,
+  pairedOutboundDate = null,
+  pairedOutboundSelection = null,
+  outboundLegFilter = null,
+  returnLegFilter = null,
+  dateBounds = null,
+  qualityFilter,
+  summaryTitle = 'Selected itinerary',
+  gridTitle,
+  panelTestId,
+  routeStopsMin = null,
+  routeStopsMax = null,
+  hideReturn = false,
 }: PriceWindowPanelProps) {
   // Internal selection state — only used in uncontrolled mode (controlledSelection === undefined)
   const [selection, setSelection] = useState<CellSelection | null>(null)
@@ -257,7 +375,8 @@ export function PriceWindowPanel({
     prevControlledRef.current = controlledSelection
   }, [controlledSelection])
 
-  const { dates, globalMinByDate, globalTopRoutesByDate, perRouteByDate, routeKeyOrder } = result
+  const { dates, globalTopRoutesByDate, perRouteByDate, routeKeyOrder } = result
+  const overrideMap: PriceOverrideMap = verifications ?? new Map()
 
   // ─── Controlled vs uncontrolled selection ────────────────────────────────
   const isControlled = controlledSelection !== undefined
@@ -285,108 +404,189 @@ export function PriceWindowPanel({
     setVerifyPrice(''); setVerifyPaxDesc(''); setVerifyNote('')
   }, [effSelection?.routeKey, effSelection?.date, selectedReturnDate])
 
-  // ─── Return price maps ────────────────────────────────────────────────────
-  const minReturnByRouteKey = new Map<string, number>()
-  if (returnResult) {
-    for (const [rk, dateMap] of returnResult.perRouteByDate) {
-      let min = Infinity
-      for (const { minPrice } of dateMap.values()) {
-        if (minPrice < min) min = minPrice
-      }
-      if (min < Infinity) minReturnByRouteKey.set(rk, min)
-    }
+  function computeCellPrice(
+    routeKey: string,
+    axisDate: string,
+    bucket: RouteDateBucket | undefined,
+  ): number | null {
+    const mode =
+      returnResult
+        ? 'total_or_outbound'
+        : pairedOutboundResult && pairedOutboundRouteKey
+          ? 'return_paired'
+          : pairedOutboundResult
+            ? 'return_unpaired'
+            : 'total_or_outbound'
+    return computePwPanelCellPrice({
+      mode,
+      routeKey,
+      axisDate,
+      bucket,
+      outResult: result,
+      retResult: returnResult,
+      pairedOutboundResult,
+      pairedOutboundRouteKey,
+      pairedOutboundDate,
+      selectedReturnDate,
+      verifications: overrideMap,
+      roundTripCombos,
+      roundTripPairMeta,
+      roundTripDeepenStates,
+      rtTokenIndex,
+      dateBounds,
+      outboundLegFilter: outboundLegFilter ?? undefined,
+      returnLegFilter: returnLegFilter ?? undefined,
+      maxPrice,
+    })
   }
 
-  function combinedPrice(routeKey: string, outPrice: number): number | null {
-    let price: number
-    if (!returnResult) {
-      price = outPrice
+  const showGlobalRow = !filterToRouteKey && !pairedOutboundRouteKey && !selectionOnly
+  const visibleRoutes = useMemo(() => {
+    let routes: string[]
+    if (pairedOutboundRouteKey) {
+      routes = returnRouteKeysForOutbound(
+        pairedOutboundRouteKey,
+        roundTripCombos,
+        routeKeyOrder,
+        pairedOutboundDate,
+      )
+    } else if (filterToRouteKey) {
+      routes = perRouteByDate.has(filterToRouteKey) ? [filterToRouteKey] : []
     } else {
-      const lowestReturn = minReturnByRouteKey.get(reverseRouteKey(routeKey))
-      if (lowestReturn == null) return null
-      price = outPrice + lowestReturn
+      routes = routeKeyOrder
     }
-    if (maxPrice != null && price > maxPrice) return null
-    return price
-  }
+    // Filter route rows by stop count so routes that can never pass the UI stops
+    // filter don't appear as empty "—" placeholder rows in the grid.
+    if (routeStopsMin != null || routeStopsMax != null) {
+      routes = routes.filter((rk) => {
+        // Route key is the waypoint key, e.g. "JFK-DOH-MAA" → 1 stop (3 segments - 2 = 1 connection)
+        const connections = Math.max(0, rk.split('-').length - 2)
+        if (routeStopsMin != null && connections < routeStopsMin) return false
+        if (routeStopsMax != null && connections > routeStopsMax) return false
+        return true
+      })
+    }
+    return routes
+  }, [
+    pairedOutboundRouteKey,
+    roundTripCombos,
+    routeKeyOrder,
+    pairedOutboundDate,
+    filterToRouteKey,
+    perRouteByDate,
+    routeStopsMin,
+    routeStopsMax,
+  ])
 
-  const combinedGlobalMinByDate: Map<string, number> | null = returnResult
-    ? (() => {
-        const m = new Map<string, number>()
-        for (const date of dates) {
-          let min = Infinity
-          for (const [rk, dateMap] of perRouteByDate) {
-            const bucket = dateMap.get(date)
-            if (!bucket) continue
-            const lowestRet = minReturnByRouteKey.get(reverseRouteKey(rk))
-            if (lowestRet == null) continue
-            const combined = bucket.minPrice + lowestRet
-            if (maxPrice != null && combined > maxPrice) continue
-            if (combined < min) min = combined
+  /** One pass over routes × dates — avoids recomputing prices on every cell during render. */
+  const gridMetrics = useMemo(() => {
+    type RouteStats = { min: number | null; med: number | null }
+    const cellPrices = new Map<string, number>()
+    const cellQualities = new Map<string, HeatmapCellQuality>()
+    const routeStatsMap = new Map<string, RouteStats>()
+    const displayGlobalMinByDate = new Map<string, number>()
+
+    for (const routeKey of visibleRoutes) {
+      const dateMap = perRouteByDate.get(routeKey)
+      const prices: number[] = []
+      for (const d of dates) {
+        const bucket = dateMap?.get(d)
+        const combined = computeCellPrice(routeKey, d, bucket)
+        const cellKey = `${routeKey}\u001e${d}`
+        if (combined != null) {
+          cellPrices.set(cellKey, combined)
+          prices.push(combined)
+          const prevGlobal = displayGlobalMinByDate.get(d)
+          if (prevGlobal == null || combined < prevGlobal) {
+            displayGlobalMinByDate.set(d, combined)
           }
-          if (min < Infinity) m.set(date, min)
         }
-        return m
-      })()
-    : null
-
-  const cappedGlobalMinByDate: Map<string, number> = useMemo(() => {
-    if (maxPrice == null || combinedGlobalMinByDate != null) return globalMinByDate
-    const m = new Map<string, number>()
-    for (const [date, p] of globalMinByDate) {
-      if (p <= maxPrice) m.set(date, p)
+        // Always compute cell quality for badge icon accuracy (●/○/˜/—).
+        // Previously gated on qualityFilter.size>0, which caused all cells to show
+        // ● (Complete) even when returns were not loaded.
+        if (combined != null) {
+          cellQualities.set(
+            cellKey,
+            returnResult
+              ? resolveOutboundRouteDateQuality(
+                  routeKey,
+                  d,
+                  result,
+                  returnResult,
+                  overrideMap,
+                  roundTripCombos,
+                  roundTripPairMeta,
+                  dateBounds,
+                  roundTripDeepenStates,
+                  rtTokenIndex,
+                )
+              : pairedOutboundResult && pairedOutboundRouteKey
+                ? resolveReturnRouteDateQuality(
+                    pairedOutboundRouteKey,
+                    routeKey,
+                    d,
+                    pairedOutboundResult,
+                    result,
+                    overrideMap,
+                    roundTripCombos,
+                    roundTripPairMeta,
+                    dateBounds,
+                    roundTripDeepenStates,
+                    rtTokenIndex,
+                  )
+                : resolveOneWayRouteDateQuality(routeKey, d, result),
+          )
+        }
+      }
+      const sp = [...prices].sort((a, b) => a - b)
+      routeStatsMap.set(routeKey, { min: sp[0] ?? null, med: priceMedian(sp) })
     }
-    return m
-  }, [globalMinByDate, maxPrice, combinedGlobalMinByDate])
 
-  const displayGlobalMinByDate = combinedGlobalMinByDate ?? cappedGlobalMinByDate
+    const allPrices = [...cellPrices.values()]
+    const minP = allPrices.length ? Math.min(...allPrices) : 0
+    const maxP = allPrices.length ? Math.max(...allPrices) : 0
 
-  const allPrices: number[] = []
-  if (!returnResult) {
-    for (const p of globalMinByDate.values()) allPrices.push(p)
-    for (const dateMap of perRouteByDate.values()) {
-      for (const { minPrice } of dateMap.values()) allPrices.push(minPrice)
-    }
-  } else {
-    for (const [rk, dateMap] of perRouteByDate) {
-      const lowestReturn = minReturnByRouteKey.get(reverseRouteKey(rk))
-      if (lowestReturn == null) continue
-      for (const { minPrice } of dateMap.values()) allPrices.push(minPrice + lowestReturn)
-    }
+    return { cellPrices, cellQualities, routeStatsMap, displayGlobalMinByDate, minP, maxP }
+  }, [
+    visibleRoutes,
+    dates,
+    perRouteByDate,
+    result,
+    returnResult,
+    overrideMap,
+    roundTripCombos,
+    roundTripPairMeta,
+    dateBounds,
+    roundTripDeepenStates,
+    rtTokenIndex,
+    outboundLegFilter,
+    maxPrice,
+    pairedOutboundResult,
+    pairedOutboundRouteKey,
+    pairedOutboundDate,
+    selectedReturnDate,
+    selectedReturnIt,
+    qualityFilter,
+  ])
+
+  const { cellPrices, cellQualities, routeStatsMap, displayGlobalMinByDate, minP, maxP } = gridMetrics
+
+  const sortedRoutes = useMemo(() => {
+    if (statSort === 'default') return visibleRoutes
+    return [...visibleRoutes].sort((a, b) => {
+      const col: 'min' | 'med' = statSort.startsWith('min') ? 'min' : 'med'
+      const va = routeStatsMap.get(a)?.[col] ?? Infinity
+      const vb = routeStatsMap.get(b)?.[col] ?? Infinity
+      return statSort.endsWith('desc') ? vb - va : va - vb
+    })
+  }, [visibleRoutes, routeStatsMap, statSort])
+
+  function routeDateQuality(routeKey: string, axisDate: string): HeatmapCellQuality {
+    // Always return the computed quality for badge display — never short-circuit to 'perfect'.
+    // The old shortcut caused all cells to show ● (Complete) even when return itineraries
+    // were not loaded, misleading the user into thinking the cell had full data.
+    return cellQualities.get(`${routeKey}\u001e${axisDate}`) ?? 'empty'
   }
-  const minP = allPrices.length ? Math.min(...allPrices) : 0
-  const maxP = allPrices.length ? Math.max(...allPrices) : 0
-
-  // Hide the "All routes" row in selectionOnly mode (it's not actionable there)
-  const showGlobalRow = !filterToRouteKey && !selectionOnly
-  const visibleRoutes = filterToRouteKey
-    ? perRouteByDate.has(filterToRouteKey) ? [filterToRouteKey] : []
-    : routeKeyOrder.slice(0, MAX_ROUTES_SHOWN)
-
-  // ─── Precompute min/median per route (for stat columns + sorting) ─────────
-  type RouteStats = { min: number | null; med: number | null }
-  const routeStatsMap = new Map<string, RouteStats>()
-  for (const routeKey of visibleRoutes) {
-    const dateMap = perRouteByDate.get(routeKey)
-    if (!dateMap) { routeStatsMap.set(routeKey, { min: null, med: null }); continue }
-    const prices: number[] = []
-    for (const d of dates) {
-      const bucket = dateMap.get(d)
-      if (!bucket) continue
-      const p = combinedPrice(routeKey, bucket.minPrice)
-      if (p != null) prices.push(p)
-    }
-    const sp = [...prices].sort((a, b) => a - b)
-    routeStatsMap.set(routeKey, { min: sp[0] ?? null, med: priceMedian(sp) })
-  }
-
-  // Apply stat sort (3-way toggle: asc → desc → default)
-  const sortedRoutes = statSort === 'default' ? visibleRoutes : [...visibleRoutes].sort((a, b) => {
-    const col: keyof RouteStats = statSort.startsWith('min') ? 'min' : 'med'
-    const va = routeStatsMap.get(a)?.[col] ?? Infinity
-    const vb = routeStatsMap.get(b)?.[col] ?? Infinity
-    return statSort.endsWith('desc') ? vb - va : va - vb
-  })
 
   // ─── Interaction handlers ─────────────────────────────────────────────────
   function toggleGlobal(date: string) {
@@ -398,37 +598,140 @@ export function PriceWindowPanel({
     }
   }
 
+  const isReturnLegPanel = !!(pairedOutboundResult && pairedOutboundRouteKey)
+
+  function cellItineraryOptions(routeKey: string, date: string) {
+    if (isReturnLegPanel) {
+      const raw = returnItinerariesForCell(
+        pairedOutboundRouteKey!,
+        pairedOutboundDate ?? undefined,
+        routeKey,
+        date,
+        perRouteByDate.get(routeKey)?.get(date),
+        roundTripCombos,
+      )
+      return returnLegFilter ? raw.filter(returnLegFilter) : raw
+    }
+    // In round-trip context (Return panel present), prefer itinerary-backed RT candidates
+    // (combos or ranked) over bucket contents, so the selected itinerary matches the shown cell price.
+    if (returnResult) {
+      const rtCandidates = outboundItinerariesForCell(
+        routeKey,
+        date,
+        undefined,
+        roundTripCombos,
+        roundTripDeepenStates,
+        outboundLegFilter,
+        deepenByOutDate,
+      )
+      if (rtCandidates.length) return rtCandidates
+    }
+    return outboundItinerariesForCell(
+      routeKey,
+      date,
+      perRouteByDate.get(routeKey)?.get(date),
+      roundTripCombos,
+      roundTripDeepenStates,
+      outboundLegFilter,
+      deepenByOutDate,
+    )
+  }
+
+  function bundledPriceForOutboundOption(
+    it: NormalizedItinerary,
+    routeKey: string,
+    outDate: string,
+  ): number | null {
+    if (!returnResult || !selectedReturnDate || selectedReturnDate <= outDate) {
+      return it.price ?? null
+    }
+    if (roundTripCombos?.length) {
+      const price = minPriceForOutboundScheduleOnPair(
+        it,
+        routeKey,
+        outDate,
+        selectedReturnDate,
+        overrideMap,
+        roundTripCombos,
+        returnLegFilter ?? undefined,
+      )
+      if (price != null) return price
+    }
+    const schedulePrice = minTokenPriceForScheduleOnPair(
+      it,
+      routeKey,
+      outDate,
+      selectedReturnDate,
+      roundTripDeepenStates,
+      roundTripCombos,
+      overrideMap,
+    )
+    if (schedulePrice != null) return schedulePrice
+    const resolved = resolveRoundTripSelection({
+      routeKey,
+      outDate,
+      outIt: it,
+      outResult: result,
+      retResult: returnResult,
+      verifications: overrideMap,
+      roundTripCombos,
+      roundTripPairMeta,
+      roundTripDeepenStates,
+      selectedReturnDate,
+      selectedReturnIt: selectedReturnIt ?? null,
+    })
+    return resolved.bundledPrice
+  }
+
+  function pickOutboundForCell(routeKey: string, date: string, options: NormalizedItinerary[]) {
+    if (!options.length) return { pickedIdx: 0, pickedIt: undefined as NormalizedItinerary | undefined }
+    if (!returnResult || !selectedReturnDate || selectedReturnDate <= date) {
+      return { pickedIdx: 0, pickedIt: options[0] }
+    }
+    let bestIdx = 0
+    let bestPrice = Infinity
+    for (let i = 0; i < options.length; i++) {
+      const resolved = resolveRoundTripSelection({
+        routeKey,
+        outDate: date,
+        outIt: options[i]!,
+        outResult: result,
+        retResult: returnResult,
+        verifications: overrideMap,
+        roundTripCombos,
+        roundTripPairMeta,
+        roundTripDeepenStates,
+        selectedReturnDate,
+        selectedReturnIt: selectedReturnIt ?? null,
+      })
+      const p = resolved.bundledPrice
+      if (p != null && p < bestPrice) {
+        bestPrice = p
+        bestIdx = i
+      }
+    }
+    return { pickedIdx: bestIdx, pickedIt: options[bestIdx] }
+  }
+
   function toggleRoute(routeKey: string, date: string) {
     const isActive = effSelection?.routeKey === routeKey && effSelection?.date === date
-    const bucket = perRouteByDate.get(routeKey)?.get(date)
-    const pickedIt = bucket?.allItineraries[0] ?? bucket?.bestItinerary
+    const options = cellItineraryOptions(routeKey, date)
+    const { pickedIdx, pickedIt } = pickOutboundForCell(routeKey, date, options)
     if (isActive) {
       if (!isControlled) setSelection(null)
       onRouteSelect?.(null)
     } else {
-      if (!isControlled) setSelection({ kind: 'route', routeKey, date, pickedIdx: 0 })
-      onRouteSelect?.({ routeKey, date, pickedIdx: 0, selectedItinerary: pickedIt })
+      if (!isControlled) setSelection({ kind: 'route', routeKey, date, pickedIdx })
+      onRouteSelect?.({ routeKey, date, pickedIdx, selectedItinerary: pickedIt })
     }
   }
 
   function pickItinerary(routeKey: string, date: string, idx: number) {
-    const bucket = perRouteByDate.get(routeKey)?.get(date)
-    const pickedIt = bucket?.allItineraries[idx] ?? bucket?.bestItinerary
-    if (!isControlled) setSelection({ kind: 'route', routeKey, date, pickedIdx: idx })
-    onRouteSelect?.({ routeKey, date, pickedIdx: idx, selectedItinerary: pickedIt })
-  }
-
-  function routeLabel(routeKey: string): { path: string; fullTitle: string; carriers: string } {
-    const [waypoint, carriers = ''] = routeKey.split('|')
-    const airports = waypoint.split('-')
-    const path = airports.join(' › ')
-    const fullTitle = airports
-      .map((iata) => {
-        const name = namesByIata.get(iata)
-        return name ? `${name} (${iata})` : iata
-      })
-      .join(' › ')
-    return { path, fullTitle, carriers }
+    const options = cellItineraryOptions(routeKey, date)
+    const pickedIdx = options[idx] != null ? idx : 0
+    const pickedIt = options[pickedIdx]
+    if (!isControlled) setSelection({ kind: 'route', routeKey, date, pickedIdx })
+    onRouteSelect?.({ routeKey, date, pickedIdx, selectedItinerary: pickedIt })
   }
 
   // ─── Verification badge set: "routeKey|outDate" pairs that have any verification ───
@@ -436,10 +739,10 @@ export function PriceWindowPanel({
     const s = new Set<string>()
     if (!verifications) return s
     for (const key of verifications.keys()) {
-      // key format: routeKey::outDepTime::retDepTime
-      // outDepTime is "YYYY-MM-DD HH:mm" — extract just the date for cell-level badge
-      const parts = key.split('::')
-      if (parts.length >= 2) s.add(`${parts[0]}|${parts[1].slice(0, 10)}`)
+      const parsed = parseVKey(key)
+      if (!parsed) continue
+      const outDate = legKeyDepTime(parsed.outLegKey).slice(0, 10)
+      if (outDate) s.add(`${parsed.routeKey}|${outDate}`)
     }
     return s
   }, [verifications])
@@ -450,38 +753,151 @@ export function PriceWindowPanel({
       ? (globalTopRoutesByDate.get(selection.date) ?? [])
       : null
 
-  const selectedRouteBucket = effSelection
-    ? perRouteByDate.get(effSelection.routeKey)?.get(effSelection.date) ?? null
-    : null
+  const cellOutboundOptionsList = useMemo(() => {
+    if (!effSelection) return []
+    return cellItineraryOptions(effSelection.routeKey, effSelection.date)
+  }, [effSelection, perRouteByDate, roundTripCombos, roundTripDeepenStates, isReturnLegPanel, pairedOutboundRouteKey, pairedOutboundDate, outboundLegFilter, returnLegFilter])
+
+  /** schedule key → departure_token for the selected outbound date — all ranked pairs. */
+  const outboundTokenByScheduleKey = useMemo((): Map<string, string> => {
+    const map = new Map<string, string>()
+    if (!effSelection || !roundTripDeepenStates) return map
+    for (const s of roundTripDeepenStates) {
+      if (s.outDate !== effSelection.date) continue
+      for (const { it, token } of s.ranked) {
+        const k = itineraryScheduleKey(it)
+        if (!map.has(k)) map.set(k, token)
+      }
+    }
+    return map
+  }, [effSelection, roundTripDeepenStates])
 
   const pickedOutboundIt: NormalizedItinerary | null =
-    effSelection && selectedRouteBucket
-      ? (selectedRouteBucket.allItineraries[effSelection.pickedIdx] ?? selectedRouteBucket.bestItinerary)
+    effSelection && cellOutboundOptionsList.length
+      ? (cellOutboundOptionsList[effSelection.pickedIdx] ?? cellOutboundOptionsList[0])
       : null
+
+  const deepenDatePair = useMemo((): { outDate: string; retDate: string } | null => {
+    if (!effSelection) return null
+    if (isReturnLegPanel && pairedOutboundDate) {
+      if (effSelection.date <= pairedOutboundDate) return null
+      return { outDate: pairedOutboundDate, retDate: effSelection.date }
+    }
+    if (returnResult && selectedReturnDate && selectedReturnDate > effSelection.date) {
+      return { outDate: effSelection.date, retDate: selectedReturnDate }
+    }
+    return null
+  }, [effSelection, isReturnLegPanel, pairedOutboundDate, returnResult, selectedReturnDate])
+
+  const selectedPairMeta = useMemo(() => {
+    if (!roundTripPairMeta || !deepenDatePair) return null
+    return roundTripPairMeta.get(roundTripPairCellKey(deepenDatePair.outDate, deepenDatePair.retDate)) ?? null
+  }, [roundTripPairMeta, deepenDatePair])
+
+  const combosForSelectedDatePair = useMemo(() => {
+    if (!effSelection || !deepenDatePair || !roundTripCombos?.length) return []
+    return roundTripCombos.filter(
+      (c) =>
+        c.routeKey === effSelection.routeKey &&
+        c.outDate === deepenDatePair.outDate &&
+        c.retDate === deepenDatePair.retDate,
+    )
+  }, [effSelection, deepenDatePair, roundTripCombos])
+
+  const filteredReturnOptionsForSelectedPair = useMemo(() => {
+    if (!combosForSelectedDatePair.length) return []
+    const raw = combosForSelectedDatePair.map((c) => ({ ...c.retIt, price: c.roundTripPrice }))
+    const filtered = returnLegFilter ? raw.filter(returnLegFilter) : raw
+    return dedupeByScheduleKey(filtered)
+  }, [combosForSelectedDatePair, returnLegFilter])
+
 
   // ─── Helpers used in both summary and detail panel ────────────────────────
   function buildDetailContext(outIt: NormalizedItinerary, outDate: string) {
+    const routeKey = effSelection?.routeKey ?? ''
+    const airports = routeKey.split('|')[0].split('-')
+
     let bestRetDate = selectedReturnDate ?? ''
     let bestRetIt: NormalizedItinerary | null = selectedReturnIt ?? null
+    let totalPrice: number | null = null
+    let rtBundled = false
 
-    // If no explicit return is selected but returnResult is available, auto-pick cheapest
-    if (!bestRetIt && returnResult && effSelection) {
-      const revKey = reverseRouteKey(effSelection.routeKey)
-      const retDateMap = returnResult.perRouteByDate.get(revKey)
-      if (retDateMap) {
-        let bestRetPrice = Infinity
-        for (const [d, bucket] of retDateMap) {
-          if (bucket.minPrice < bestRetPrice) {
-            bestRetPrice = bucket.minPrice
-            bestRetDate = d
-            bestRetIt = bucket.bestItinerary
-          }
+    if (returnResult && effSelection) {
+      const resolved = resolveRoundTripSelection({
+        routeKey,
+        outDate,
+        outIt,
+        outResult: result,
+        retResult: returnResult,
+        verifications: overrideMap,
+        roundTripCombos,
+        roundTripPairMeta,
+        roundTripDeepenStates,
+        selectedReturnDate: selectedReturnDate ?? null,
+        selectedReturnIt: selectedReturnIt ?? null,
+      })
+      bestRetDate = resolved.bestRetDate
+      bestRetIt = resolved.bestRetIt
+      rtBundled = true
+      if (selectedReturnDate && selectedReturnDate > outDate) {
+        totalPrice = minCombinedForDatePair(
+          routeKey,
+          outDate,
+          selectedReturnDate,
+          result,
+          returnResult,
+          overrideMap,
+          roundTripCombos,
+          roundTripPairMeta,
+          dateBounds,
+          roundTripDeepenStates,
+          outboundLegFilter ?? undefined,
+          returnLegFilter ?? undefined,
+        )
+      } else {
+        totalPrice = resolved.bundledPrice
+      }
+      if (bestRetIt) {
+        const verified = lookupVerificationRow(overrideMap, routeKey, outIt, bestRetIt)
+        if (verified?.verifiedPrice != null && verified.verifiedPrice > 0) {
+          totalPrice = verified.verifiedPrice
         }
+      }
+    } else if (pairedOutboundResult && pairedOutboundSelection && effSelection && isReturnLegPanel) {
+      const outOpts = outboundItinerariesForCell(
+        pairedOutboundSelection.routeKey,
+        pairedOutboundSelection.date,
+        pairedOutboundResult.perRouteByDate.get(pairedOutboundSelection.routeKey)?.get(pairedOutboundSelection.date),
+        roundTripCombos,
+        roundTripDeepenStates,
+        null,
+        deepenByOutDate,
+      )
+      const outLeg = pairedOutboundSelection.selectedItinerary
+        ?? outOpts[pairedOutboundSelection.pickedIdx ?? 0]
+        ?? outOpts[0]
+      if (outLeg) {
+        const resolved = resolveRoundTripSelection({
+          routeKey: pairedOutboundSelection.routeKey,
+          outDate: pairedOutboundSelection.date,
+          outIt: outLeg,
+          outResult: pairedOutboundResult,
+          retResult: result,
+          verifications: overrideMap,
+          roundTripCombos,
+          roundTripPairMeta,
+          roundTripDeepenStates,
+          selectedReturnDate: effSelection.date,
+          selectedReturnIt: outIt,
+        })
+        bestRetDate = resolved.bestRetDate
+        bestRetIt = resolved.bestRetIt
+        totalPrice = resolved.bundledPrice
+        rtBundled = true
       }
     }
 
-    const airports = (effSelection?.routeKey ?? '').split('|')[0].split('-')
-    const deepUrl = buildGoogleFlightsDeepLink(outIt, outDate, bestRetIt, bestRetIt ? bestRetDate : null)
+    const deepUrl = buildGoogleFlightsDeepLink(outIt, outDate, bestRetIt, bestRetIt ? bestRetDate : null, adults, children, bestRetIt != null, cabinClass)
     const { url: searchUrl, reliable } = buildGoogleFlightsSearchUrl(
       [airports[0]],
       [airports[airports.length - 1]],
@@ -489,47 +905,42 @@ export function PriceWindowPanel({
       bestRetIt ? bestRetDate : null,
     )
 
-    const outPrice = outIt.price
-    const retPrice = bestRetIt?.price
-    const totalPrice = outPrice != null && retPrice != null ? outPrice + retPrice : null
-
     const copyDetails = async () => {
       const lines = [itineraryDetailsText(outIt, 'Outbound', outDate)]
       if (bestRetIt) lines.push('', itineraryDetailsText(bestRetIt, 'Return', bestRetDate))
+      if (rtBundled && totalPrice != null) {
+        lines.push('', `Round-trip fare (bundled): ${formatPriceAmount(totalPrice, currency)}`)
+      }
       await navigator.clipboard.writeText(lines.join('\n'))
     }
 
-    return { bestRetIt, bestRetDate, deepUrl, url: deepUrl ?? searchUrl, reliable, outPrice, retPrice, totalPrice, copyDetails }
+    return {
+      bestRetIt,
+      bestRetDate,
+      deepUrl,
+      url: deepUrl ?? searchUrl,
+      reliable,
+      totalPrice,
+      rtBundled,
+      copyDetails,
+    }
   }
 
-  const displayTitle = filterToRouteKey
-    ? `${title} · ${filterToRouteKey.split('|')[0].replace(/-/g, ' › ')}`
-    : title
+  const routeSuffix = (rk: string) => rk.split('|')[0].replace(/-/g, ' › ')
+  const displayTitle = selectionOnly
+    ? summaryTitle
+    : pairedOutboundRouteKey
+      ? `${title} · ${routeSuffix(pairedOutboundRouteKey)}`
+      : filterToRouteKey
+        ? `${title} · ${routeSuffix(filterToRouteKey)}`
+        : title
+  const displayGridTitle = gridTitle ?? title
+  const panelBodyOpen = !collapsible || isOpen
 
-  return (
-    <div className="pw-panel">
-      <div className="pw-panel-titlebar">
-        <h3 className="pw-panel-title">{displayTitle}</h3>
-        {collapsible && (
-          <button
-            type="button"
-            className="pw-panel-collapse-btn"
-            onClick={() => setIsOpen((v) => !v)}
-            aria-expanded={isOpen}
-            title={isOpen ? 'Collapse' : 'Expand'}
-          >
-            {isOpen ? '▾' : '▸'}
-          </button>
-        )}
-      </div>
-
-      {(!collapsible || isOpen) && <>
-
-        {/* ── selectionOnly summary (Total Round Trip panel) ─────────────── */}
-        {selectionOnly && (
-          <div className="pw-sel-summary">
+  const selectedItinerarySummary = selectionOnly ? (
+    <div className="pw-sel-summary">
             {effSelection && pickedOutboundIt ? (() => {
-              const { bestRetIt, bestRetDate, url, deepUrl, reliable, outPrice, retPrice, totalPrice, copyDetails } =
+              const { bestRetIt, bestRetDate, url, deepUrl, reliable, totalPrice, rtBundled, copyDetails } =
                 buildDetailContext(pickedOutboundIt, effSelection.date)
 
               // Derive airports from routeKey for per-leg GF links
@@ -549,17 +960,37 @@ export function PriceWindowPanel({
                 layoverLongMinHours,
                 layoverShortMaxHours,
                 priceCurrency: currency,
+                hideFare: rtBundled,
               } : null
 
               return (
                 <>
+                  {totalPrice != null && rtBundled && (
+                    <div className="pw-sel-rt-hero" data-testid="pw-round-trip-fare" data-pw-price={totalPrice}>
+                      <div className="pw-sel-rt-hero-label">Round-trip fare</div>
+                      <div className="pw-sel-rt-hero-price">{formatPriceAmount(totalPrice, currency)}</div>
+                      {bestRetIt && bestRetDate ? (
+                        <div className="pw-sel-rt-hero-dates muted small">
+                          Outbound {shortDateWithDay(effSelection.date)} · Return {shortDateWithDay(bestRetDate)}
+                        </div>
+                      ) : (
+                        <div className="pw-sel-rt-hero-dates muted small">
+                          Outbound {shortDateWithDay(effSelection.date)}
+                          {bestRetDate ? ` · best return ${shortDateWithDay(bestRetDate)}` : ''}
+                          {' '}· SerpApi bundled price (not outbound + return)
+                        </div>
+                      )}
+                    </div>
+                  )}
                   {canShowRichCard && sharedCardProps ? (
                     <div className="srt-legs">
                       <div className="srt-leg">
                         <div className="srt-leg-header">
-                          <span className="srt-leg-label">Outbound · {shortDateWithDay(effSelection.date)}</span>
+                          <span className="srt-leg-label">
+                            {hideReturn ? shortDateWithDay(effSelection.date) : `Outbound · ${shortDateWithDay(effSelection.date)}`}
+                          </span>
                           {deepUrl && (
-                            <a href={deepUrl} target="_blank" rel="noopener noreferrer" className="srt-leg-gf-icon" title="Open round-trip in Google Flights">↗</a>
+                            <a href={deepUrl} target="_blank" rel="noopener noreferrer" className="srt-leg-gf-icon" title="Open in Google Flights">↗</a>
                           )}
                         </div>
                         <ItineraryCard
@@ -569,30 +1000,36 @@ export function PriceWindowPanel({
                           gfDestinations={outDests}
                           linkDate={effSelection.date}
                           returnDate={bestRetIt ? bestRetDate : null}
+                          travelClass={cabinClass}
                         />
                       </div>
-                      {bestRetIt ? (
+                      {!hideReturn && (
                         <div className="srt-leg srt-leg--return">
                           <div className="srt-leg-header">
-                            <span className="srt-leg-label">Return · {shortDateWithDay(bestRetDate)}</span>
+                            <span className="srt-leg-label">
+                              Return{bestRetDate ? ` · ${shortDateWithDay(bestRetDate)}` : ''}
+                            </span>
                             {deepUrl && (
                               <a href={deepUrl} target="_blank" rel="noopener noreferrer" className="srt-leg-gf-icon" title="Open round-trip in Google Flights">↗</a>
                             )}
                           </div>
-                          <ItineraryCard
-                            {...sharedCardProps}
-                            it={bestRetIt}
-                            gfOrigins={outDests}
-                            gfDestinations={outOrigins}
-                            linkDate={bestRetDate}
-                            returnDate={null}
-                          />
-                        </div>
-                      ) : (
-                        <div className="srt-leg srt-leg--return">
-                          <p className="pw-sel-hint muted small">
-                            ↓ Pick a return date in the Return panel below
-                          </p>
+                          {bestRetIt ? (
+                            <ItineraryCard
+                              {...sharedCardProps}
+                              it={bestRetIt}
+                              gfOrigins={outDests}
+                              gfDestinations={outOrigins}
+                              linkDate={bestRetDate}
+                              returnDate={null}
+                              travelClass={cabinClass}
+                            />
+                          ) : (
+                            <p className="muted small" style={{ margin: 0 }}>
+                              {bestRetDate
+                                ? 'Price is known for this date pair, but return itineraries are not loaded yet. Deepen this date pair to fetch them.'
+                                : 'Pick a return date to see the return itinerary here.'}
+                            </p>
+                          )}
                         </div>
                       )}
                     </div>
@@ -600,50 +1037,54 @@ export function PriceWindowPanel({
                     <>
                       <div className="pw-sel-row">
                         <span className="pw-sel-label">Outbound · {shortDateWithDay(effSelection.date)}</span>
-                        <ItineraryCompact it={pickedOutboundIt} currency={currency} />
+                        <ItineraryCompact it={pickedOutboundIt} currency={currency} hidePrice={rtBundled} />
                       </div>
-                      {bestRetIt ? (
+                      {!hideReturn && (bestRetIt || bestRetDate) ? (
                         <div className="pw-sel-row">
-                          <span className="pw-sel-label">Return · {shortDateWithDay(bestRetDate)}</span>
-                          <ItineraryCompact it={bestRetIt} currency={currency} />
+                          <span className="pw-sel-label">Return · {bestRetDate ? shortDateWithDay(bestRetDate) : '—'}</span>
+                          {bestRetIt ? (
+                            <ItineraryCompact it={bestRetIt} currency={currency} hidePrice={rtBundled} />
+                          ) : (
+                            <span className="muted small">Deepen to load itineraries</span>
+                          )}
                         </div>
-                      ) : (
-                        <p className="pw-sel-hint muted small">
-                          ↓ Pick a return date in the Return panel below
-                        </p>
-                      )}
+                      ) : null}
                     </>
                   )}
-                  {totalPrice != null && (
+                  {totalPrice != null && !rtBundled && (
                     <div className="pw-sel-total">
-                      Round-trip total:{' '}
+                      Total:{' '}
                       <strong className="pw-sel-total-value">{formatPriceAmount(totalPrice, currency)}</strong>
-                      <span className="pw-sel-total-breakdown muted">
-                        {' '}({formatPriceAmount(outPrice!, currency)} + {formatPriceAmount(retPrice!, currency)})
-                      </span>
                     </div>
                   )}
 
                   {/* ── Verified price section ── */}
                   {onUpsertVerification && (() => {
-                    // Dep times uniquely identify the specific itinerary (not just the date)
-                    const outDepTime = pickedOutboundIt.segments[0]?.depTime ?? ''
-                    const retDepTime = bestRetIt?.segments[0]?.depTime ?? ''
-                    const vk = vKey(effSelection.routeKey, outDepTime, retDepTime)
-                    const existing = verifications?.get(vk)
+                    const outLegKey = legVerificationKey(pickedOutboundIt)
+                    const retLegKey = bestRetIt ? legVerificationKey(bestRetIt) : ''
+                    const existing = bestRetIt
+                      ? lookupVerificationRow(
+                          verifications ?? new Map(),
+                          effSelection.routeKey,
+                          pickedOutboundIt,
+                          bestRetIt,
+                        )
+                      : undefined
                     return (
                       <div className="pw-sel-verify" onClick={e => e.stopPropagation()}>
                         {existing && (
                           <div className="pw-sel-verify-existing">
                             <span className="pw-sel-verify-badge">✓ Verified</span>
-                            <strong className="pw-sel-verify-price">{formatPriceAmount(existing.verifiedPrice, existing.currency)}</strong>
+                            <strong className="pw-sel-verify-price">{verificationPriceLabel(existing, formatPriceAmount)}</strong>
                             {existing.paxDesc && <span className="muted small">{existing.paxDesc}</span>}
                             {existing.note && <span className="muted small">· {existing.note}</span>}
                           </div>
                         )}
                         <div className="pw-sel-verify-label muted small">
-                          {outDepTime ? `Out dep: ${outDepTime.slice(11)}` : 'Out dep: unknown'}
-                          {retDepTime ? ` · Ret dep: ${retDepTime.slice(11)}` : ''}
+                          {outLegKey ? `Out: ${legKeyDepTime(outLegKey).slice(11)}` : 'Out: unknown'}
+                          {outLegKey.includes('::') ? ` ${outLegKey.split('::')[1]}` : ''}
+                          {retLegKey ? ` · Ret: ${legKeyDepTime(retLegKey).slice(11)}` : ''}
+                          {retLegKey.includes('::') ? ` ${retLegKey.split('::')[1]}` : ''}
                         </div>
                         <div className="pw-sel-verify-inputs">
                           <input
@@ -678,8 +1119,8 @@ export function PriceWindowPanel({
                                   routeKey: effSelection.routeKey,
                                   outDate: effSelection.date,
                                   retDate: bestRetDate,
-                                  outDepTime,
-                                  retDepTime,
+                                  outDepTime: outLegKey,
+                                  retDepTime: retLegKey,
                                   verifiedPrice: p,
                                   currency,
                                   paxDesc: verifyPaxDesc.trim(),
@@ -693,7 +1134,7 @@ export function PriceWindowPanel({
                               <button
                                 type="button"
                                 className="btn btn-ghost btn-small"
-                                onClick={() => void onRemoveVerification(effSelection.routeKey, outDepTime, retDepTime)}
+                                onClick={() => void onRemoveVerification(effSelection.routeKey, outLegKey, retLegKey)}
                               >
                                 Clear
                               </button>
@@ -739,14 +1180,50 @@ export function PriceWindowPanel({
                   </div>
                 </>
               )
-            })() : (
+            })() : effSelection && deepenDatePair ? (
+              <>
+                {filteredReturnOptionsForSelectedPair.length > 0 && (
+                  <div className="pw-detail-panel">
+                    <div className="pw-detail-heading">Return options fetched</div>
+                    <p className="muted small" style={{ marginTop: 0 }}>
+                      These are the return flights found for this date pair (bundled round-trip price is shown on the right).
+                      Select a return date/cell in the Return panel to use one of these in the round-trip summary.
+                    </p>
+                    <div className="pw-itin-list">
+                      {filteredReturnOptionsForSelectedPair.map((it, i) => (
+                        <div key={i} className="pw-itin-option-wrap">
+                          <div className="pw-itin-option-body" style={{ cursor: 'default' }}>
+                            <ItineraryCompact it={it} currency={currency} hidePrice={false} />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {combosForSelectedDatePair.length > 0 && filteredReturnOptionsForSelectedPair.length === 0 && (
+                  <div className="pw-detail-panel">
+                    <div className="pw-detail-heading">Return options fetched</div>
+                    <p className="muted small" style={{ marginTop: 0 }}>
+                      Return itineraries were fetched for this date pair, but **none match your current filters** (including layover bounds).
+                      Try relaxing filters or keep fetching more routes.
+                    </p>
+                  </div>
+                )}
+              </>
+            ) : effSelection ? (
               <p className="pw-sel-hint muted small">
-                ↓ Click a cell in the grid below to select an outbound date and route
+                Select a return date in the Return panel to fetch options for this outbound date.
+              </p>
+            ) : (
+              <p className="pw-sel-hint muted small">
+                Click a cell in the Total round-trip by date grid below to select an outbound date and route
               </p>
             )}
-          </div>
-        )}
+    </div>
+  ) : null
 
+  const priceGridSection = (
+    <>
         {displayGlobalMinByDate.size === 0 && routeKeyOrder.length === 0 && (
           <div className="pw-no-results">
             No priced results found.
@@ -756,7 +1233,8 @@ export function PriceWindowPanel({
           </div>
         )}
 
-        {(displayGlobalMinByDate.size > 0 || routeKeyOrder.length > 0) && <div className="pw-grid-wrap">
+        {(displayGlobalMinByDate.size > 0 || routeKeyOrder.length > 0) && (
+        <div className="pw-grid-wrap">
           <div className="pw-grid-scroll">
 
             {/* Header row */}
@@ -820,6 +1298,11 @@ export function PriceWindowPanel({
                         style={{ background: heatColor(p, minP, maxP) }}
                         onClick={() => toggleGlobal(d)}
                         title={`${shortDateWithDay(d)}: ${formatPriceAmount(p, currency)}`}
+                        data-testid="pw-price-cell"
+                        data-pw-panel={panelTestId ?? title}
+                        data-pw-route="__global__"
+                        data-pw-date={d}
+                        data-pw-price={p}
                       >
                         {formatPriceAmount(p, currency)}
                       </button>
@@ -833,75 +1316,77 @@ export function PriceWindowPanel({
 
             {/* Route rows */}
             {sortedRoutes.map((routeKey) => {
-              const dateMap = perRouteByDate.get(routeKey)
-              if (!dateMap) return null
-              const { path, fullTitle, carriers } = routeLabel(routeKey)
               const { min: routeMin, med: routeMed } = routeStatsMap.get(routeKey) ?? { min: null, med: null }
 
               return (
                 <div key={routeKey} className="pw-grid-row pw-grid-route-row">
-                  <div className="pw-label-col pw-label-sticky pw-label-route" title={fullTitle}>
-                    <span className="pw-route-path">{path}</span>
-                    {carriers && <span className="pw-route-carriers">{carriers}</span>}
+                  <div className="pw-label-col pw-label-sticky pw-label-route">
+                    <RouteLabelCell
+                      routeKey={routeKey}
+                      namesByIata={namesByIata}
+                      airlinesMeta={airlinesMeta}
+                      airlineDirectory={airlineDirectory}
+                    />
                   </div>
                   <div
-                    className={`pw-stat-col pw-stat-col--min pw-stat-sticky${routeMin != null ? ' pw-stat-heat' : ''}${statSort.startsWith('min') ? ' pw-stat-sorted' : ''}`}
+                    className={`pw-stat-col pw-stat-col--min pw-stat-sticky${routeMin != null ? ' pw-stat-heat' : ''}`}
                     style={routeMin != null ? { '--pw-heat-bg': heatColor(routeMin, minP, maxP) } as React.CSSProperties : undefined}
                   >
                     {routeMin != null ? formatPriceAmount(routeMin, currency) : '—'}
                   </div>
                   <div
-                    className={`pw-stat-col pw-stat-col--med pw-stat-sticky${routeMed != null ? ' pw-stat-heat' : ''}${statSort.startsWith('med') ? ' pw-stat-sorted' : ''}`}
+                    className={`pw-stat-col pw-stat-col--med pw-stat-sticky${routeMed != null ? ' pw-stat-heat' : ''}`}
                     style={routeMed != null ? { '--pw-heat-bg': heatColor(routeMed, minP, maxP) } as React.CSSProperties : undefined}
                   >
                     {routeMed != null ? formatPriceAmount(routeMed, currency) : '—'}
                   </div>
                   {dates.map((d) => {
-                    const bucket = dateMap.get(d)
                     const isActive =
                       effSelection?.routeKey === routeKey && effSelection?.date === d
 
-                    if (!bucket) {
-                      return <div key={d} className="pw-date-col pw-empty-cell">—</div>
-                    }
-
-                    const combined = combinedPrice(routeKey, bucket.minPrice)
+                    const combined = cellPrices.get(`${routeKey}\u001e${d}`) ?? null
+                    const cellQ = routeDateQuality(routeKey, d)
                     if (combined == null) {
-                      return <div key={d} className="pw-date-col pw-empty-cell">—</div>
+                      return (
+                        <div
+                          key={d}
+                          className={[
+                            'pw-date-col',
+                            'pw-empty-cell',
+                            heatmapQualityCellClass('empty', qualityFilter),
+                          ].filter(Boolean).join(' ')}
+                        >
+                          <HeatmapQualityBadge quality="empty" />
+                          <span>—</span>
+                        </div>
+                      )
                     }
 
-                    // Tooltip: for round-trip panels show top-3 return date options with combined price
-                    const retDateMap = returnResult?.perRouteByDate.get(reverseRouteKey(routeKey))
-                    let tooltipText: string
-                    if (retDateMap && retDateMap.size > 0) {
-                      const top3 = [...retDateMap.entries()]
-                        .map(([retDate, retBucket]) => ({
-                          date: retDate,
-                          retPrice: retBucket.minPrice,
-                          combined: bucket.minPrice + retBucket.minPrice,
-                        }))
-                        .filter((o) => maxPrice == null || o.combined <= maxPrice)
-                        .sort((a, b) => a.combined - b.combined)
-                        .slice(0, 3)
-                      tooltipText = top3.length > 0
-                        ? top3.map((o) =>
-                            `${formatPriceAmount(o.combined, currency)} (ret: ${shortRetDate(o.date)} ${formatPriceAmount(o.retPrice, currency)})`
-                          ).join('\n')
-                        : `${shortDateWithDay(d)}: ${formatPriceAmount(combined, currency)}`
-                    } else {
-                      tooltipText = `${shortDateWithDay(d)}: ${formatPriceAmount(combined, currency)}`
-                    }
+                    // Tooltip: price only (full return breakdown is expensive — computed on demand elsewhere)
+                    const tooltipText = `${shortDateWithDay(d)}: ${formatPriceAmount(combined, currency)}`
 
                     const hasVerification = verifiedCellSet.has(`${routeKey}|${d}`)
+                    const qualityTitle = HEATMAP_QUALITY_DEFS[cellQ].title
                     return (
                       <button
                         key={d}
                         type="button"
-                        className={`pw-date-col pw-price-cell${isActive ? ' pw-cell-active' : ''}`}
+                        className={[
+                          'pw-date-col',
+                          'pw-price-cell',
+                          isActive ? 'pw-cell-active' : '',
+                          heatmapQualityCellClass(cellQ, qualityFilter),
+                        ].filter(Boolean).join(' ')}
                         style={{ background: heatColor(combined, minP, maxP) }}
                         onClick={() => toggleRoute(routeKey, d)}
-                        title={tooltipText}
+                        title={[tooltipText, qualityTitle].join('\n')}
+                        data-testid="pw-price-cell"
+                        data-pw-panel={panelTestId ?? title}
+                        data-pw-route={routeKey}
+                        data-pw-date={d}
+                        data-pw-price={combined}
                       >
+                        <HeatmapQualityBadge quality={cellQ} className="pw-hq-badge--cell" />
                         {hasVerification && <span className="pw-cell-verified-badge">✓</span>}
                         {formatPriceAmount(combined, currency)}
                       </button>
@@ -912,11 +1397,54 @@ export function PriceWindowPanel({
             })}
 
           </div>
-        </div>}
+        </div>
+        )}
+    </>
+  )
+
+  const panelTitlebar = (titleText: string) => (
+    <div className="pw-panel-titlebar">
+      <h3 className="pw-panel-title">{titleText}</h3>
+      {collapsible && (
+        <button
+          type="button"
+          className="pw-panel-collapse-btn"
+          onClick={() => setIsOpen((v) => !v)}
+          aria-expanded={isOpen}
+          title={isOpen ? 'Collapse' : 'Expand'}
+        >
+          {isOpen ? '▾' : '▸'}
+        </button>
+      )}
+    </div>
+  )
+
+  if (selectionOnly) {
+    return (
+      <div className="pw-panel-duo">
+        <div
+          className="pw-panel pw-panel--selected-itinerary"
+          data-testid={panelTestId ? `${panelTestId}-itinerary` : undefined}
+        >
+          {panelTitlebar(summaryTitle)}
+          {panelBodyOpen && selectedItinerarySummary}
+        </div>
+        <div className="pw-panel pw-panel--date-grid" data-testid={panelTestId}>
+          {panelTitlebar(displayGridTitle)}
+          {panelBodyOpen && priceGridSection}
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="pw-panel" data-testid={panelTestId}>
+      {panelTitlebar(displayTitle)}
+      {panelBodyOpen && <>
+        {priceGridSection}
 
         {/* ── Drilldown / detail panel (shown when NOT in selectionOnly mode) ── */}
-        {!selectionOnly && <>
-          {selection?.kind === 'global' && selectedGlobalRoutes != null && (
+          {selection?.kind === 'global' && selectedGlobalRoutes != null && selectedGlobalRoutes.length > 0 && (
             <div className="pw-detail-panel">
               <div className="pw-detail-heading">
                 Top routes · {shortDateWithDay(selection.date)}
@@ -925,10 +1453,10 @@ export function PriceWindowPanel({
             </div>
           )}
 
-          {effSelection && selectedRouteBucket && pickedOutboundIt && (() => {
+          {effSelection && pickedOutboundIt && (() => {
             const outIt = pickedOutboundIt
             const outDate = effSelection.date
-            const allOut = selectedRouteBucket.allItineraries
+            const allOut = cellOutboundOptionsList
             const pickedIdx = effSelection.pickedIdx
             const routeAirports = effSelection.routeKey.split('|')[0].split('-')
 
@@ -967,12 +1495,12 @@ export function PriceWindowPanel({
                 </div>
 
                 <div className="pw-detail-heading">
-                  Options · {shortDateWithDay(outDate)}
+                  {isReturnLegPanel ? 'Return options' : 'Options'} · {shortDateWithDay(outDate)}
                   {allOut.length > 1 && <span className="pw-detail-count"> ({allOut.length})</span>}
                 </div>
                 <div className="pw-itin-list">
                   {allOut.map((it, i) => {
-                    const optDeepUrl = buildGoogleFlightsDeepLink(it, outDate, bestRetIt, bestRetIt ? bestRetDate : null)
+                    const optDeepUrl = buildGoogleFlightsDeepLink(it, outDate, bestRetIt, bestRetIt ? bestRetDate : null, adults, children, bestRetIt != null, cabinClass)
                     const { url: optSearchUrl } = buildGoogleFlightsSearchUrl(
                       [routeAirports[0]],
                       [routeAirports[routeAirports.length - 1]],
@@ -980,6 +1508,7 @@ export function PriceWindowPanel({
                       bestRetIt ? bestRetDate : null,
                     )
                     const optGfUrl = optDeepUrl ?? optSearchUrl
+                    const departureToken = outboundTokenByScheduleKey.get(itineraryScheduleKey(it))
                     return (
                       <div key={i} className={`pw-itin-option-wrap${i === pickedIdx ? ' pw-itin-option--active' : ''}`}>
                         <button
@@ -988,7 +1517,28 @@ export function PriceWindowPanel({
                           onClick={() => pickItinerary(effSelection.routeKey, effSelection.date, i)}
                           title="Select this itinerary"
                         >
-                          <ItineraryCompact it={it} currency={currency} />
+                          <ItineraryCompact
+                            it={it}
+                            currency={currency}
+                            hidePrice={isReturnLegPanel && !!roundTripCombos?.length}
+                            displayPrice={
+                              isReturnLegPanel
+                                ? undefined
+                                : bundledPriceForOutboundOption(it, effSelection.routeKey, effSelection.date)
+                            }
+                          />
+                          {departureToken && (
+                            <span
+                              className="pw-departure-token"
+                              title={`departure_token — click to copy:\n${departureToken}`}
+                              onClick={async (e) => {
+                                e.stopPropagation()
+                                await navigator.clipboard.writeText(departureToken)
+                              }}
+                            >
+                              {departureToken.slice(0, 28)}…
+                            </span>
+                          )}
                         </button>
                         <a
                           href={optGfUrl}
@@ -1005,13 +1555,41 @@ export function PriceWindowPanel({
               </div>
             )
           })()}
-        </>}
 
-        {!filterToRouteKey && routeKeyOrder.length > MAX_ROUTES_SHOWN && (
-          <p className="pw-truncated-note muted small">
-            Showing top {MAX_ROUTES_SHOWN} of {routeKeyOrder.length} routes by cheapest price.
-          </p>
-        )}
+          {effSelection && !pickedOutboundIt && deepenDatePair && (
+            <>
+              {filteredReturnOptionsForSelectedPair.length > 0 && (
+                <div className="pw-detail-panel">
+                  <div className="pw-detail-heading">Return options fetched</div>
+                  <p className="muted small" style={{ marginTop: 0 }}>
+                    These return flights are now available for this date pair. Use the Return panel to pick one (or keep deepening to fetch more routes).
+                  </p>
+                  <div className="pw-itin-list">
+                    {filteredReturnOptionsForSelectedPair.map((it, i) => (
+                      <div key={i} className="pw-itin-option-wrap">
+                        <div className="pw-itin-option-body" style={{ cursor: 'default' }}>
+                          <ItineraryCompact it={it} currency={currency} hidePrice={false} />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {combosForSelectedDatePair.length > 0 && filteredReturnOptionsForSelectedPair.length === 0 && (
+                <div className="pw-detail-panel">
+                  <div className="pw-detail-heading">Return options fetched</div>
+                  <p className="muted small" style={{ marginTop: 0 }}>
+                    Return itineraries were fetched for this date pair, but **none match your current filters**.
+                  </p>
+                </div>
+              )}
+            </>
+          )}
+          {effSelection && !pickedOutboundIt && !deepenDatePair && (
+            <p className="pw-sel-hint muted small pw-detail-panel">
+              Pick an outbound in Total or Outbound above before fetching return options here.
+            </p>
+          )}
       </>}
     </div>
   )

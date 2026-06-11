@@ -11,6 +11,11 @@
     "build:data": "node scripts/build-airports.mjs && node scripts/build-airlines.mjs",
     "start": "cross-env NODE_ENV=production node server/index.js",
     "lint": "eslint .",
+    "audit:rt-serp": "node scripts/audit-rt-serp.mjs",
+    "audit:phase0": "node scripts/phase0-rt-audit-live.mjs",
+    "inspect:cache": "node scripts/inspect-cache-db.mjs",
+    "compact:rt-cache": "node scripts/compact-rt-cache.mjs",
+    "validate:pw-prices": "vitest run src/lib/pwPriceConsistencyCheck.test.ts",
     "preview": "vite preview"
   },
   "dependencies": {

@@ -43,7 +43,8 @@ CREATE TABLE IF NOT EXISTS search_run (
   center_date TEXT NOT NULL,
   flex_days INTEGER NOT NULL,
   max_segments INTEGER NOT NULL,
-  mock_mode INTEGER NOT NULL
+  mock_mode INTEGER NOT NULL,
+  pax_desc TEXT NOT NULL DEFAULT '1A'
 );
 
 CREATE TABLE IF NOT EXISTS itinerary (
@@ -86,7 +87,7 @@ CREATE TABLE IF NOT EXISTS layover_row (
   FOREIGN KEY (itinerary_id) REFERENCES itinerary(id) ON DELETE CASCADE
 );
 
-CREATE INDEX IF NOT EXISTS idx_search_run_hash_dir ON search_run(params_hash, direction, mock_mode);
+CREATE INDEX IF NOT EXISTS idx_search_run_hash_dir ON search_run(params_hash, direction, mock_mode, pax_desc);
 CREATE INDEX IF NOT EXISTS idx_itinerary_run ON itinerary(search_run_id);
 CREATE INDEX IF NOT EXISTS idx_segment_itin ON segment(itinerary_id);
 CREATE INDEX IF NOT EXISTS idx_layover_itin ON layover_row(itinerary_id);
@@ -101,6 +102,22 @@ CREATE TABLE IF NOT EXISTS serp_api_capture (
 );
 
 CREATE INDEX IF NOT EXISTS idx_serp_capture_created ON serp_api_capture(created_at);
+
+-- Price-window / discovery true round-trip state per date pair (tokens, combos, Serp queries).
+CREATE TABLE IF NOT EXISTS rt_pair_cache (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  updated_at INTEGER NOT NULL,
+  params_hash TEXT NOT NULL,
+  out_date TEXT NOT NULL,
+  ret_date TEXT NOT NULL,
+  pax_desc TEXT NOT NULL,
+  mock_mode INTEGER NOT NULL,
+  payload_json TEXT NOT NULL,
+  UNIQUE(params_hash, out_date, ret_date, pax_desc, mock_mode)
+);
+
+CREATE INDEX IF NOT EXISTS idx_rt_pair_cache_lookup
+  ON rt_pair_cache(params_hash, out_date, ret_date, pax_desc, mock_mode);
 
 -- Recent search form snapshots (for History). Separate from search_run cache rows.
 CREATE TABLE IF NOT EXISTS search_history (
@@ -147,6 +164,7 @@ CREATE TABLE IF NOT EXISTS price_verification (
   out_dep_time TEXT NOT NULL DEFAULT '', -- first outbound departure "YYYY-MM-DD HH:mm"
   ret_dep_time TEXT NOT NULL DEFAULT '', -- first return departure   "YYYY-MM-DD HH:mm"
   verified_price REAL NOT NULL,
+  cached_price REAL,                   -- out+ret cache sum when verified (optional)
   currency TEXT NOT NULL DEFAULT 'USD',
   pax_desc TEXT NOT NULL DEFAULT '',
   note TEXT NOT NULL DEFAULT '',

@@ -3,6 +3,9 @@ import type { ConfigPreset, ConfigSnapshot } from '../lib/filterPresetTypes'
 
 type Props = {
   presets: ConfigPreset[]
+  /** Controlled selection (shows ★ default in dropdown on load). */
+  selectedPresetId: string
+  onSelectedPresetIdChange: (id: string) => void
   currentConfig: ConfigSnapshot
   onApply: (config: ConfigSnapshot) => void
   onSave: (name: string, config: ConfigSnapshot) => void
@@ -17,6 +20,8 @@ type SavingMode = null | 'confirm-replace' | 'new'
 
 export function ConfigPresetsBar({
   presets,
+  selectedPresetId,
+  onSelectedPresetIdChange,
   currentConfig,
   onApply,
   onSave,
@@ -26,7 +31,6 @@ export function ConfigPresetsBar({
   onSetDefault,
   onClearDefault,
 }: Props) {
-  const [selectedId, setSelectedId] = useState<string>('')
   const [savingMode, setSavingMode] = useState<SavingMode>(null)
   const [saveName, setSaveName] = useState('')
   const [renaming, setRenaming] = useState<string | null>(null)
@@ -34,10 +38,10 @@ export function ConfigPresetsBar({
   const nameInputRef = useRef<HTMLInputElement>(null)
   const renameInputRef = useRef<HTMLInputElement>(null)
 
-  const selected = presets.find((p) => p.id === selectedId) ?? null
+  const selected = presets.find((p) => p.id === selectedPresetId) ?? null
 
   function handleSelect(id: string) {
-    setSelectedId(id)
+    onSelectedPresetIdChange(id)
     setSavingMode(null)
     const p = presets.find((pr) => pr.id === id)
     if (p) onApply(p.config)
@@ -92,7 +96,7 @@ export function ConfigPresetsBar({
 
   function handleDelete(id: string) {
     onDelete(id)
-    if (selectedId === id) setSelectedId('')
+    if (selectedPresetId === id) onSelectedPresetIdChange('')
     setSavingMode(null)
   }
 
@@ -103,7 +107,7 @@ export function ConfigPresetsBar({
 
         <select
           className="input input-tiny filter-presets-select"
-          value={selectedId}
+          value={selectedPresetId}
           onChange={(e) => handleSelect(e.target.value)}
         >
           <option value="">— none —</option>
@@ -167,7 +171,7 @@ export function ConfigPresetsBar({
             title={
               selected
                 ? `Save current config — will ask to replace "${selected.name}" or save as new`
-                : 'Save current filters + dates as a new config preset'
+                : 'Save current filters, airports, and date ranges as a new config preset'
             }
           >
             + Save current

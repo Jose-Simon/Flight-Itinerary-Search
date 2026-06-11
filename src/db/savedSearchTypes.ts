@@ -1,6 +1,7 @@
 import type { RegionId } from '../data/regions'
 import type {
   AircraftMatchMode,
+  DedupeMode,
   HourFieldStrings,
   LegDurationMatchMode,
   PriceFieldStrings,
@@ -19,6 +20,10 @@ export type SavedSearchPayloadV1 = {
   outboundEnd: string
   returnDate: string
   returnEnd: string
+  adultCount?: number
+  childrenCount?: number
+  /** Cabin class: 1=Economy (default), 2=Premium Economy, 3=Business, 4=First */
+  cabinClass?: number
   /** @deprecated kept for reading old saved searches; use outboundEnd / returnEnd instead */
   flexDays?: number
   returnCustomFilters: boolean
@@ -45,7 +50,7 @@ export type SavedSearchPayloadV1 = {
   timeBucketsOut: TimeOfDayBucket[]
   timeBucketsRet: TimeOfDayBucket[]
   displayTimezone: string
-  uniqueRoutesOnly: boolean
+  dedupeMode: DedupeMode
   aircraftSelectedCodes: string[]
   aircraftMatchMode: AircraftMatchMode
   airlineExcludedCodes: string[]

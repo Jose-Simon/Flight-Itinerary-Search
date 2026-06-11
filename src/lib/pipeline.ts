@@ -8,10 +8,13 @@ import {
 import { dedupeByScheduleKey, itineraryScheduleKey, sortItineraries, type SortMode } from './filters'
 
 export type NormalizeContext = {
-  primaryDestination?: string
+  destinations?: string[]
   direction: 'outbound' | 'return'
-  multipleDestinations?: boolean
   roundTrip?: boolean
+  /** @deprecated use destinations[] */
+  primaryDestination?: string
+  /** @deprecated use destinations[] */
+  multipleDestinations?: boolean
 }
 
 /**

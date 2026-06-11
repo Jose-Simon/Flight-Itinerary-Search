@@ -6,6 +6,15 @@ export type SortMode = 'duration' | 'flight' | 'stops' | 'layover' | 'price'
 /** How min/max leg duration applies when an itinerary has multiple segments. */
 export type LegDurationMatchMode = 'all' | 'any'
 
+/**
+ * Deduplication mode for the results list.
+ * - 'off'      — show all itineraries (one row per date/variant)
+ * - 'route'    — one row per airport path (cheapest fare wins)
+ * - 'schedule' — one row per airport path + layover durations combo (different connection
+ *                lengths are separate rows; still deduplicates exact same-schedule entries)
+ */
+export type DedupeMode = 'off' | 'route' | 'schedule'
+
 /** Max connections (layovers) allowed when stops max is open — keeps pool usable without “max segments” UI. */
 const DEFAULT_MAX_LAYOVERS_CAP = 20
 
@@ -250,12 +259,57 @@ export function dedupeByScheduleKey(items: NormalizedItinerary[]): NormalizedIti
   return out
 }
 
-/** After filtering: keep a single “best” itinerary per airport path (by current sort). */
+/** Same schedule key may appear on multiple date pairs with different RT prices — keep cheapest. */
+export function dedupeByScheduleKeyKeepMinPrice(items: NormalizedItinerary[]): NormalizedItinerary[] {
+  const byKey = new Map<string, NormalizedItinerary>()
+  for (const it of items) {
+    const k = itineraryScheduleKey(it)
+    const prev = byKey.get(k)
+    if (!prev) {
+      byKey.set(k, it)
+      continue
+    }
+    const prevP = prev.price ?? Infinity
+    const nextP = it.price ?? Infinity
+    if (nextP < prevP) byKey.set(k, it)
+  }
+  return [...byKey.values()]
+}
+
+/** After filtering: keep the cheapest itinerary per airport path, then re-sort by the active sort. */
 export function dedupeDisplayByWaypoint(items: NormalizedItinerary[], sort: SortMode): NormalizedItinerary[] {
-  const sorted = sortItineraries([...items], sort)
+  // Always rank by price to pick the best per route — dedup by duration would hide cheaper long-layover
+  // variants when the user later applies a min-layover filter or switches the display sort to price.
+  const byPrice = sortItineraries([...items], 'price')
   const best = new Map<string, NormalizedItinerary>()
-  for (const it of sorted) {
+  for (const it of byPrice) {
     if (!best.has(it.waypointKey)) best.set(it.waypointKey, it)
+  }
+  return sortItineraries([...best.values()], sort)
+}
+
+/**
+ * Key combining the airport path with each layover's airport and duration.
+ * Two itineraries on the same route but with different layover lengths get distinct keys.
+ * Does NOT include departure/arrival times, so the same schedule on different calendar dates
+ * shares the same key and the cheapest date is kept.
+ */
+export function routeAndScheduleKey(it: NormalizedItinerary): string {
+  const lay = it.layovers.map((l) => `${l.airport}:${l.durationMinutes}`).join('>')
+  return `${it.waypointKey}§${lay || '∅'}`
+}
+
+/**
+ * Keep the cheapest itinerary per (route + layover-duration combo), then re-sort.
+ * Itineraries that share an airport path but differ in connection time appear as separate rows.
+ * Within each schedule variant the cheapest date wins.
+ */
+export function dedupeDisplayBySchedule(items: NormalizedItinerary[], sort: SortMode): NormalizedItinerary[] {
+  const byPrice = sortItineraries([...items], 'price')
+  const best = new Map<string, NormalizedItinerary>()
+  for (const it of byPrice) {
+    const k = routeAndScheduleKey(it)
+    if (!best.has(k)) best.set(k, it)
   }
   return sortItineraries([...best.values()], sort)
 }

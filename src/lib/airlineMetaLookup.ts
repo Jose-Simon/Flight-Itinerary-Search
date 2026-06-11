@@ -25,6 +25,10 @@ function normName(s: string): string {
 const SERP_BRAND_AIRLINE: Record<string, { iata: string; displayName: string; country: string }> = {
   FLYADEAL: { iata: 'F3', displayName: 'Flyadeal', country: 'Saudi Arabia' },
   SAUDIA: { iata: 'SV', displayName: 'Saudia', country: 'Saudi Arabia' },
+  /** OpenFlights keys 4Y as “Airbus France”; SerpApi uses the marketing name. */
+  DISCOVER: { iata: '4Y', displayName: 'Discover Airlines', country: 'Germany' },
+  'DISCOVER AIRLINES': { iata: '4Y', displayName: 'Discover Airlines', country: 'Germany' },
+  'EUROWINGS DISCOVER': { iata: '4Y', displayName: 'Discover Airlines', country: 'Germany' },
 }
 
 /**
@@ -35,6 +39,9 @@ const SERP_BRAND_AIRLINE: Record<string, { iata: string; displayName: string; co
 const SERP_BRAND_NAME_TO_IATA: Record<string, string> = {
   AKASA: 'QP',
   'AKASA AIR': 'QP',
+  DISCOVER: '4Y',
+  'DISCOVER AIRLINES': '4Y',
+  'EUROWINGS DISCOVER': '4Y',
 }
 
 /** OpenFlights name/country fixes (regenerated `airlinesMeta.json` would otherwise overwrite raw data). */
@@ -139,4 +146,25 @@ export function enrichAirlineFromMeta(
     iata: /^[A-Z0-9]{2}$/i.test(filterKey) ? filterKey : null,
     country: 'Unknown',
   }
+}
+
+/** SerpApi `include_airlines` requires 2-char IATA (e.g. QR), not marketing names. */
+const SERP_INCLUDE_AIRLINE_IATA = /^[A-Z][A-Z0-9]$/
+
+/**
+ * Resolve a segment/filter token to an IATA code suitable for SerpApi `include_airlines`.
+ * Returns null when the token cannot be mapped to a valid 2-character IATA code.
+ */
+export function resolveAirlineFilterKeyToIata(
+  rawFromSegment: string,
+  meta: AirlinesMeta,
+  nameFallback: Record<string, string>,
+): string | null {
+  const enriched = enrichAirlineFromMeta(rawFromSegment, meta, nameFallback)
+  if (enriched.iata && SERP_INCLUDE_AIRLINE_IATA.test(enriched.iata.toUpperCase())) {
+    return enriched.iata.toUpperCase()
+  }
+  const key = enriched.filterKey.toUpperCase()
+  if (SERP_INCLUDE_AIRLINE_IATA.test(key)) return key
+  return null
 }

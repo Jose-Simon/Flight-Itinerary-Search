@@ -26,11 +26,16 @@ export type SerpCaptureListRow = {
   summary_json: string
 }
 
+/** Fields passed to `saveSerpApiCapture` (excluding stored record envelope). */
+export type SerpCaptureSaveSummary = Omit<SerpCaptureStoredRecord, 'version' | 'savedAt' | 'data'> & {
+  searchGoal?: 'discovery' | 'priceWindow'
+}
+
 const MAX_CAPTURES = 20
 
 export function saveSerpApiCapture(
   db: Database,
-  summary: Omit<SerpCaptureStoredRecord, 'version' | 'savedAt' | 'data'>,
+  summary: SerpCaptureSaveSummary,
   data: SerpCaptureStoredRecord['data'],
 ) {
   const record: SerpCaptureStoredRecord = {
@@ -41,6 +46,7 @@ export function saveSerpApiCapture(
   }
   const payloadJson = JSON.stringify(record)
   const summaryJson = JSON.stringify({
+    searchGoal: summary.searchGoal ?? 'discovery',
     origins: summary.origins,
     destinations: summary.destinations,
     outboundDate: summary.outboundDate,

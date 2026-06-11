@@ -46,4 +46,6 @@ Render injects `PORT`; the server listens on that value.
 
 ## Round trip behavior
 
-Outbound and return are two **independent** one-way-style SerpApi searches (destinations ↔ origins on the return leg). This avoids chained `departure_token` calls and matches “routing discovery only,” not a single round-trip fare quote.
+**Price window** (round trip): SerpApi **round-trip** searches run for each valid **outbound date × return date** pair (`type: 1` with `outbound_date` + `return_date`). For each outbound option, the app follows `departure_token` to load return options and stores the **bundled round-trip price** (same fare model as Google Flights). Optionally enable **Also search one-way legs** to run separate one-way outbound/return searches for comparison.
+
+**Discovery** search still uses independent one-way leg queries per flex date (routing exploration without chained tokens).

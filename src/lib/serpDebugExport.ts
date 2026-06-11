@@ -4,13 +4,14 @@ import { collectAllSerpOptions } from './normalizeFlight'
 
 export type SerpSearchDebugQuery = {
   outboundDate: string
+  returnDate?: string
   requestParams: SerpSearchParams
   /** Full SerpApi JSON body for this request (same as browser would see from the proxy). */
   response: SerpGoogleFlightsResponse
 }
 
 export type SerpSearchDebugBundle = {
-  direction: 'outbound' | 'return'
+  direction: 'outbound' | 'return' | 'roundTrip'
   queries: SerpSearchDebugQuery[]
 }
 
@@ -101,9 +102,25 @@ export function buildSerpAnalysisSummary(bundle: SerpSearchDebugBundle): SerpAna
 }
 
 /** Full download payload: raw responses + compact analysis (for offline debugging). */
-export function buildSerpDownloadPayload(bundles: { outbound: SerpSearchDebugBundle | null; return: SerpSearchDebugBundle | null }) {
+export function buildSerpDownloadPayload(bundles: {
+  outbound: SerpSearchDebugBundle | null
+  return: SerpSearchDebugBundle | null
+  roundTrip?: SerpSearchDebugBundle | null
+}) {
   return {
     exportedAt: new Date().toISOString(),
+    roundTrip: bundles.roundTrip
+      ? {
+          direction: bundles.roundTrip.direction,
+          queries: bundles.roundTrip.queries.map((q) => ({
+            outboundDate: q.outboundDate,
+            returnDate: q.returnDate,
+            requestParams: q.requestParams,
+            response: q.response,
+          })),
+          analysis: buildSerpAnalysisSummary(bundles.roundTrip),
+        }
+      : null,
     outbound: bundles.outbound
       ? {
           direction: bundles.outbound.direction,

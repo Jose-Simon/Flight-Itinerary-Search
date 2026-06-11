@@ -34,7 +34,9 @@ export function StopsFilterBlock({ distributionSource, stopsMin, stopsMax, onSto
           ))}
         </div>
       ) : (
-        <p className="muted small stops-filter-visual-empty">Run a search to see stop mix in the pool.</p>
+        <p className="muted small stops-filter-visual-empty">
+          Run a search to see stop mix in the pool. During a round-trip price scan, the pool fills as routes load.
+        </p>
       )}
       <div className="grid-2 tight-gap">
         <label className="field-tight">

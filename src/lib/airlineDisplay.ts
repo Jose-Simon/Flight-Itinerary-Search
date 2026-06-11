@@ -75,6 +75,16 @@ export function segmentAirlineLogoSrc(
   return segmentAirlineLogoFromEnriched(segment, e)
 }
 
+/** Logo for a marketing carrier token from a route key (IATA code or SerpApi name). */
+export function marketingCarrierLogoUrl(
+  rawCarrier: string,
+  meta: AirlinesMeta,
+  nameFallback: Record<string, string>,
+): string | null {
+  const e = enrichAirlineFromMeta(rawCarrier, meta, nameFallback)
+  return segmentAirlineLogoFromEnriched({ airlineLogo: undefined }, e)
+}
+
 export function airlineDisplayName(
   code: string | undefined,
   directory: Record<string, string>,

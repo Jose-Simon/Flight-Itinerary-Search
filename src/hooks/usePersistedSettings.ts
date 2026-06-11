@@ -9,11 +9,20 @@ export type PersistedSettings = {
   hl: string
   currency: string
   deepSearch: boolean
+  /** Expand round-trip outbound candidate pool near global min (percent). */
+  rtExpandWithinPctEnabled: boolean
+  rtExpandWithinPct: number
   showHidden: boolean
   /** Layover longer than this (hours) is highlighted as “long” on result cards. */
   layoverLongMinHours: number
   /** Layover shorter than this (hours) is highlighted as “short” on result cards. */
   layoverShortMaxHours: number
+  /** Number of adult passengers (≥1). Affects SerpApi results and GF deep links. */
+  adults: number
+  /** Number of child passengers (0–8). SerpApi accepts a count; GF encodes per-child. */
+  children: number
+  /** Planned SerpApi calls per clock hour for price-window runs (hour 2+ return tranche). */
+  pwHourlySerpCalls: number
 }
 
 const defaultSettings: PersistedSettings = {
@@ -22,10 +31,20 @@ const defaultSettings: PersistedSettings = {
   gl: 'us',
   hl: 'en',
   currency: 'USD',
-  deepSearch: false,
+  deepSearch: true,
+  rtExpandWithinPctEnabled: false,
+  rtExpandWithinPct: 20,
   showHidden: true,
   layoverLongMinHours: 8,
   layoverShortMaxHours: 1,
+  adults: 1,
+  children: 2,
+  pwHourlySerpCalls: 180,
+}
+
+/** Canonical pax descriptor for cache keys and display, e.g. “1A”, “1A2C”, “2A1C”. */
+export function paxDesc(adults: number, children: number): string {
+  return `${adults}A${children > 0 ? `${children}C` : ''}`
 }
 
 function load(): PersistedSettings {
@@ -39,10 +58,11 @@ function load(): PersistedSettings {
     const { regionCountries: _unusedRegionCountries, perDateLimit: _legacyPerDate, ...rest } = p
     void _unusedRegionCountries
     void _legacyPerDate
-    return {
-      ...defaultSettings,
-      ...rest,
-    }
+    const merged = { ...defaultSettings, ...rest }
+    const pw = Number(merged.pwHourlySerpCalls)
+    merged.pwHourlySerpCalls =
+      Number.isFinite(pw) && pw > 0 ? Math.min(500, Math.round(pw)) : defaultSettings.pwHourlySerpCalls
+    return merged
   } catch {
     return { ...defaultSettings }
   }

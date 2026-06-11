@@ -95,8 +95,10 @@ export function PriceHistogramFilter({ distributionSource, minStr, maxStr, onMin
 
   const rangeLabel =
     minN != null || maxN != null
-      ? `range ${fmt(minN ?? lo)}–${fmt(maxN ?? hi)}`
-      : `pool ${fmt(lo)}–${fmt(hi)}`
+      ? `filter ${fmt(minN ?? lo)}–${fmt(maxN ?? hi)}`
+      : empty
+        ? 'set range below (applies when results load)'
+        : `pool ${fmt(lo)}–${fmt(hi)}`
 
   return (
     <div className="duration-hist-row hist--blue">
@@ -104,7 +106,7 @@ export function PriceHistogramFilter({ distributionSource, minStr, maxStr, onMin
         <span className="duration-hist-title">Total price</span>
         <span className="duration-hist-range-label muted small">{empty ? 'no fares in pool' : rangeLabel}</span>
       </div>
-      <div className="duration-hist-chart" style={{ minWidth: `${Math.max(200, counts.length * 8)}px` }}>
+      <div className="duration-hist-chart">
         <div
           className="duration-hist-bars"
           role="img"
@@ -153,7 +155,6 @@ export function PriceHistogramFilter({ distributionSource, minStr, maxStr, onMin
             step={step}
             value={minSlider}
             onChange={(e) => onMin(e.target.value)}
-            disabled={empty}
           />
           <input
             type="range"
@@ -163,7 +164,6 @@ export function PriceHistogramFilter({ distributionSource, minStr, maxStr, onMin
             step={step}
             value={maxSlider}
             onChange={(e) => onMax(e.target.value)}
-            disabled={empty}
           />
         </div>
       </div>
@@ -177,7 +177,6 @@ export function PriceHistogramFilter({ distributionSource, minStr, maxStr, onMin
               placeholder="Any"
               value={minStr}
               onChange={(e) => onMin(e.target.value)}
-              disabled={empty}
             />
             <span className="duration-hist-suffix">{sym}</span>
           </div>
@@ -191,7 +190,6 @@ export function PriceHistogramFilter({ distributionSource, minStr, maxStr, onMin
               placeholder="Any"
               value={maxStr}
               onChange={(e) => onMax(e.target.value)}
-              disabled={empty}
             />
             <span className="duration-hist-suffix">{sym}</span>
           </div>

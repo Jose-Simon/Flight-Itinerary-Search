@@ -24,6 +24,7 @@ type Props = {
   cacheTtlHours: number
   onCacheTtlChange: (hours: number) => void
   onDownloadDb: () => void
+  onRestoreDb: (file: File) => void | Promise<void>
   onResetSqlite: () => void
   getSerpCaptureRows: () => Promise<SerpCaptureListRow[]>
   getSerpCaptureStoredRecord: (id: number) => Promise<SerpCaptureStoredRecord | null>
@@ -45,11 +46,14 @@ export function SettingsModal({
   cacheTtlHours,
   onCacheTtlChange,
   onDownloadDb,
+  onRestoreDb,
   onResetSqlite,
   getSerpCaptureRows,
   getSerpCaptureStoredRecord,
   onDeleteSerpCapture,
 }: Props) {
+  const restoreInputRef = useRef<HTMLInputElement>(null)
+
   const [airlineDraftByRegion, setAirlineDraftByRegion] = useState<Record<RegionId, string>>(() =>
     formatIataListByRegion(airlineUiRegions),
   )
@@ -144,6 +148,26 @@ export function SettingsModal({
               placeholder="Stored in this browser only (localStorage)"
             />
           </label>
+          <label className="field">
+            <span className="label">Price window Serp calls / hour</span>
+            <input
+              className="input"
+              type="number"
+              min={20}
+              max={500}
+              step={10}
+              value={settings.pwHourlySerpCalls}
+              onChange={(e) => {
+                const n = Number(e.target.value)
+                if (!Number.isFinite(n)) return
+                onChange({ pwHourlySerpCalls: Math.min(500, Math.max(20, Math.round(n))) })
+              }}
+            />
+            <span className="muted tiny">
+              First run: full date-pair grid, then remaining budget for return fetches (50-25-25).
+              Later runs: this many return fetches only (50-25-25).
+            </span>
+          </label>
           <label className="check">
             <input
               type="checkbox"
@@ -160,6 +184,32 @@ export function SettingsModal({
             />
             Deep search (slower, higher SerpApi fidelity)
           </label>
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={settings.rtExpandWithinPctEnabled}
+              onChange={(e) => onChange({ rtExpandWithinPctEnabled: e.target.checked })}
+            />
+            Expand RT deepening pool within % of overall global minimum
+          </label>
+          {settings.rtExpandWithinPctEnabled && (
+            <label className="field field-tight">
+              <span className="label">Include outbound options within (%) of overall global min</span>
+              <input
+                className="input"
+                type="number"
+                min={0}
+                max={200}
+                step={5}
+                value={settings.rtExpandWithinPct}
+                onChange={(e) => {
+                  const n = Number(e.target.value)
+                  if (!Number.isFinite(n)) return
+                  onChange({ rtExpandWithinPct: Math.min(200, Math.max(0, Math.round(n))) })
+                }}
+              />
+            </label>
+          )}
           <label className="check">
             <input
               type="checkbox"
@@ -263,6 +313,33 @@ export function SettingsModal({
             >
               Download SQLite DB
             </button>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => restoreInputRef.current?.click()}
+              title="Load a .sqlite file exported from this app (replaces browser cache and verifications)"
+            >
+              Restore SQLite DB…
+            </button>
+            <input
+              ref={restoreInputRef}
+              type="file"
+              accept=".sqlite,application/x-sqlite3"
+              hidden
+              onChange={(e) => {
+                const file = e.target.files?.[0]
+                e.target.value = ''
+                if (!file) return
+                if (
+                  !window.confirm(
+                    `Replace the in-browser database with "${file.name}"? Current local data will be overwritten.`,
+                  )
+                ) {
+                  return
+                }
+                void onRestoreDb(file)
+              }}
+            />
             <button
               type="button"
               className="btn btn-secondary"

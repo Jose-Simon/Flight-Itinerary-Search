@@ -81,6 +81,33 @@ export function ResultsRouteMap({
     const layer = layerRef.current!
     layer.clearLayers()
 
+    // Build per-airport lookup and itinerary-count map (used for hover tooltips)
+    const airportsByIata = new Map<string, AirportRow>()
+    for (const a of airports) if (a.iata) airportsByIata.set(a.iata.trim().toUpperCase(), a)
+
+    const itinCountByIata = new Map<string, number>()
+    for (const it of [...items, ...itemsReturn]) {
+      const touched = new Set<string>()
+      for (const seg of it.segments) {
+        touched.add(seg.dep.trim().toUpperCase())
+        touched.add(seg.arr.trim().toUpperCase())
+      }
+      for (const iata of touched) itinCountByIata.set(iata, (itinCountByIata.get(iata) ?? 0) + 1)
+    }
+
+    const makeTooltip = (codeU: string): string | null => {
+      const a = airportsByIata.get(codeU)
+      const count = itinCountByIata.get(codeU)
+      const place = [a?.city, a?.country].filter(Boolean).join(', ')
+      if (!place && !count) return null
+      return (
+        `<div class="rm-tt">` +
+        (place ? `<span class="rm-tt-place">${escapeHtml(place)}</span>` : '') +
+        (count ? `<span class="rm-tt-count">${count} itinerar${count === 1 ? 'y' : 'ies'}</span>` : '') +
+        `</div>`
+      )
+    }
+
     const hasPool = items.length > 0 || itemsReturn.length > 0
 
     if (!hasPool) {
@@ -111,6 +138,8 @@ export function ResultsRouteMap({
         })
         const mk = L.marker([p.lat, p.lon], { icon, zIndexOffset: variant === 'nearby' ? 400 : 500 })
         mk.addTo(layer)
+        const tt = makeTooltip(codeU)
+        if (tt) mk.bindTooltip(tt, { permanent: false, direction: 'top', className: 'rm-tt-wrap', offset: [0, -12] })
       }
 
       for (const c of origins) addPreviewMarker(c, 'od')
@@ -185,12 +214,14 @@ export function ResultsRouteMap({
           iconSize: [labelW, labelH],
           iconAnchor: [labelW / 2, labelH / 2],
         })
-        L.marker([p.lat, p.lon], { icon, zIndexOffset: hubOn ? 750 : 500 })
+        const mk = L.marker([p.lat, p.lon], { icon, zIndexOffset: hubOn ? 750 : 500 })
           .on('click', (e) => {
             L.DomEvent.stopPropagation(e)
             hubRef.current(code)
           })
           .addTo(layer)
+        const tt = makeTooltip(codeU)
+        if (tt) mk.bindTooltip(tt, { permanent: false, direction: 'top', className: 'rm-tt-wrap', offset: [0, -12] })
       }
 
       if (boundsPts.length) {
@@ -270,12 +301,14 @@ export function ResultsRouteMap({
         iconSize: [labelW, labelH],
         iconAnchor: [labelW / 2, labelH / 2],
       })
-      L.marker([p.lat, p.lon], { icon, zIndexOffset: hubOn ? 750 : 500 })
+      const mk = L.marker([p.lat, p.lon], { icon, zIndexOffset: hubOn ? 750 : 500 })
         .on('click', (e) => {
           L.DomEvent.stopPropagation(e)
           hubRef.current(code)
         })
         .addTo(layer)
+      const tt = makeTooltip(codeU)
+      if (tt) mk.bindTooltip(tt, { permanent: false, direction: 'top', className: 'rm-tt-wrap', offset: [0, -12] })
     }
 
     const odUpperForNearby = new Set<string>()
@@ -303,7 +336,9 @@ export function ResultsRouteMap({
           iconSize: [labelW, labelH],
           iconAnchor: [labelW / 2, labelH / 2],
         })
-        L.marker([p.lat, p.lon], { icon, zIndexOffset: 400 }).addTo(layer)
+        const mk = L.marker([p.lat, p.lon], { icon, zIndexOffset: 400 }).addTo(layer)
+        const tt = makeTooltip(codeU)
+        if (tt) mk.bindTooltip(tt, { permanent: false, direction: 'top', className: 'rm-tt-wrap', offset: [0, -12] })
       }
     }
 

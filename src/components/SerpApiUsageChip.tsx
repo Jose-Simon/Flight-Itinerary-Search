@@ -5,6 +5,8 @@ type Props = {
   status: 'idle' | 'loading' | 'ok' | 'error'
   data?: SerpApiAccountInfo
   fetchedAt?: Date
+  /** e.g. "12m ago" — last price-window API search. */
+  lastSearchAgo?: string | null
   errorMessage?: string
   onRefresh: () => void
 }
@@ -13,7 +15,15 @@ function fmt(n: number | undefined): string {
   return n != null ? n.toLocaleString() : '—'
 }
 
-export function SerpApiUsageChip({ apiKey, status, data, fetchedAt, errorMessage, onRefresh }: Props) {
+export function SerpApiUsageChip({
+  apiKey,
+  status,
+  data,
+  fetchedAt,
+  lastSearchAgo,
+  errorMessage,
+  onRefresh,
+}: Props) {
   if (!apiKey.trim()) return null
 
   const used = data?.this_month_usage
@@ -61,6 +71,11 @@ export function SerpApiUsageChip({ apiKey, status, data, fetchedAt, errorMessage
             </span>
             {remaining != null && (
               <span className="serp-usage-remaining muted tiny">{fmt(remaining)} left</span>
+            )}
+            {lastSearchAgo && (
+              <span className="serp-usage-last-search muted tiny" title="Last price window API search">
+                · {lastSearchAgo}
+              </span>
             )}
           </div>
           {/* Monthly usage bar */}

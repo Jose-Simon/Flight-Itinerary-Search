@@ -118,6 +118,7 @@ function buildSegmentProto(seg: NormalizedSegment, fallbackDate: string): number
 
 /**
  * Build a LegGroup proto message.
+ * Field 6  = leg-level carrier code (from first segment; present in live GF booking URLs)
  * Field 13 = leg's departure airport (IATA), field 14 = leg's final arrival airport (IATA).
  * This matches live Google Flights booking URLs: each leg carries its own OD pair,
  * not the trip-level destination.
@@ -128,9 +129,12 @@ function buildLegProto(
   legOrigin: string,
   legDest: string,
 ): number[] {
+  // LegGroup.6 = dominant carrier for the leg (first segment's IATA code)
+  const legCarrier = segs.length > 0 ? airlineCodeFromSeg(segs[0]) : ''
   return [
     ...pbStr(2, legDate),
     ...segs.flatMap(s => pbLen(4, buildSegmentProto(s, legDate))),
+    ...(legCarrier ? pbStr(6, legCarrier) : []),
     ...pbLen(13, airportNode(legOrigin)),
     ...pbLen(14, airportNode(legDest)),
   ]
@@ -142,39 +146,64 @@ function buildLegProto(
  * Navigates to /travel/flights (search page with flights highlighted).
  *
  * Falls back gracefully: returns null if segments have no flight numbers.
+ *
+ * @param roundTrip  Pass `true` when the search is a round trip even if `returnIt`
+ *   is null (e.g. linking to just the outbound leg of a round-trip search).
+ *   When `returnIt` is provided, the trip is always treated as round-trip regardless.
+ *   Controls root.2 and root.19 in the TFS protobuf (1 = one-way, 2 = round-trip).
+ * @param travelClass  Cabin class: 1=Economy (default), 2=Premium Economy, 3=Business, 4=First.
+ *   Maps to TFS root.9.
  */
 export function buildGoogleFlightsDeepLink(
   outbound: NormalizedItinerary,
   outboundDate: string,
   returnIt: NormalizedItinerary | null = null,
   returnDate: string | null = null,
+  adults = 1,
+  children = 0,
+  roundTrip = false,
+  travelClass = 1,
 ): string | null {
   // Need at least one segment with a flight number
   if (!outbound.segments.some(s => s.flightNumber)) return null
 
+  const isRoundTrip = returnIt != null || roundTrip
   const outOrigin = outbound.segments[0]?.dep ?? ''
   const outDest = outbound.segments.at(-1)?.arr ?? ''
-  const outLeg = buildLegProto(outboundDate, outbound.segments, outOrigin, outDest)
+  // Use the first segment's actual departure date for LegGroup.2.
+  // outboundDate may be a search-range start (e.g. "2026-08-01") while the
+  // itinerary departs on "2026-08-10" — GF falls back to the search landing
+  // page if LegGroup.2 doesn't match the segment dates.
+  const outLegDate = outbound.segments[0]?.depTime?.slice(0, 10) || outboundDate
+  const outLeg = buildLegProto(outLegDate, outbound.segments, outOrigin, outDest)
 
   const bytes: number[] = [
     ...pbVarint(1, 28),
-    ...pbVarint(2, returnIt ? 2 : 1),
+    ...pbVarint(2, isRoundTrip ? 2 : 1),
     ...pbLen(3, outLeg),
   ]
 
   if (returnIt && returnDate) {
     const retOrigin = returnIt.segments[0]?.dep ?? ''
     const retDest = returnIt.segments.at(-1)?.arr ?? ''
-    bytes.push(...pbLen(3, buildLegProto(returnDate, returnIt.segments, retOrigin, retDest)))
+    // Same: use actual return first-segment date, not search range start.
+    const retLegDate = returnIt.segments[0]?.depTime?.slice(0, 10) || returnDate
+    bytes.push(...pbLen(3, buildLegProto(retLegDate, returnIt.segments, retOrigin, retDest)))
   }
 
-  // 1 adult, economy cabin
-  bytes.push(...pbVarint(8, 1))
-  bytes.push(...pbVarint(9, 1))
-  // Additional root fields present in all observed Google Flights booking URLs
+  // Passengers: field 8 is repeated — one entry per passenger.
+  // Value 1 = adult, value 2 = child (confirmed by live GF URL diff).
+  const adultCount = Math.max(1, adults)
+  const childCount = Math.max(0, children)
+  for (let i = 0; i < adultCount; i++) bytes.push(...pbVarint(8, 1))
+  for (let i = 0; i < childCount; i++) bytes.push(...pbVarint(8, 2))
+  // Cabin class: 1=Economy, 2=Premium Economy, 3=Business, 4=First (TFS root.9)
+  bytes.push(...pbVarint(9, travelClass))
+  // Additional root fields present in all observed Google Flights booking URLs.
+  // root.14 = 1 (constant); root.16 = { 1: max-uint64 }; root.19 mirrors trip type.
   bytes.push(...pbVarint(14, 1))
   bytes.push(...pbLen(16, [...pbVarintBytes((1 << 3) | 0), ...MAX_UINT64_VARINT]))
-  bytes.push(...pbVarint(19, 1))
+  bytes.push(...pbVarint(19, isRoundTrip ? 2 : 1))
 
   // Encode as base64url (no padding, + → -, / → _)
   let binaryStr = ''
@@ -199,8 +228,11 @@ export function buildGoogleFlightsSearchUrl(
     origins.length <= MAX_AIRPORTS_FOR_DEEP_LINK &&
     destinations.length <= MAX_AIRPORTS_FOR_DEEP_LINK
 
-  const from = origins.join(',')
-  const to = destinations.join(',')
+  // GF's ?q= natural-language endpoint only understands a single airport code per
+  // origin/destination — comma-separated codes like "JFK,EWR" are not parsed and
+  // result in the generic landing page being shown. Use the first code of each.
+  const from = origins[0] ?? ''
+  const to = destinations[0] ?? ''
   let q = `Flights from ${from} to ${to} on ${outboundDate}`
   if (returnDate) q += ` through ${returnDate}`
   const url = `https://www.google.com/travel/flights?q=${encodeURIComponent(q)}`

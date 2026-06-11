@@ -4,6 +4,7 @@ import { SCHEMA_V1 } from './schema'
 import { idbLoadSqlite, idbSaveSqlite } from './idb'
 import { seedAirlineUiRegionsIfEmpty } from './airlineRegionRepo'
 import { migrateRegionModelV2, seedRegionsIfEmpty, syncRegionCatalog } from './regionRepo'
+import { backfillRtPairCacheRoutes } from './rtPairCacheRepo'
 
 let sqlPromise: Promise<SqlJsStatic> | null = null
 let dbPromise: Promise<Database> | null = null
@@ -15,6 +16,47 @@ function getSql(): Promise<SqlJsStatic> {
     })
   }
   return sqlPromise
+}
+
+function migrateSearchRunPaxDesc(db: Database) {
+  const info = db.exec("SELECT name FROM pragma_table_info('search_run')")
+  const cols = (info[0]?.values ?? []).map((r) => r[0] as string)
+  if (!cols.includes('pax_desc')) {
+    db.run("ALTER TABLE search_run ADD COLUMN pax_desc TEXT NOT NULL DEFAULT '1A'")
+  }
+}
+
+function migratePriceVerificationCachedPrice(db: Database) {
+  const info = db.exec("SELECT name FROM pragma_table_info('price_verification')")
+  const cols = (info[0]?.values ?? []).map((r) => r[0] as string)
+  if (cols.length && !cols.includes('cached_price')) {
+    db.run('ALTER TABLE price_verification ADD COLUMN cached_price REAL')
+  }
+}
+
+function migrateRtPairCache(db: Database) {
+  db.run(`CREATE TABLE IF NOT EXISTS rt_pair_cache (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    updated_at INTEGER NOT NULL,
+    params_hash TEXT NOT NULL,
+    out_date TEXT NOT NULL,
+    ret_date TEXT NOT NULL,
+    pax_desc TEXT NOT NULL,
+    mock_mode INTEGER NOT NULL,
+    payload_json TEXT NOT NULL,
+    UNIQUE(params_hash, out_date, ret_date, pax_desc, mock_mode)
+  )`)
+  db.run(`CREATE INDEX IF NOT EXISTS idx_rt_pair_cache_lookup
+    ON rt_pair_cache(params_hash, out_date, ret_date, pax_desc, mock_mode)`)
+  const info = db.exec("SELECT name FROM pragma_table_info('rt_pair_cache')")
+  const cols = (info[0]?.values ?? []).map((r) => r[0] as string)
+  if (cols.length && !cols.includes('origins')) {
+    db.run('ALTER TABLE rt_pair_cache ADD COLUMN origins TEXT NOT NULL DEFAULT ""')
+    db.run('ALTER TABLE rt_pair_cache ADD COLUMN destinations TEXT NOT NULL DEFAULT ""')
+    db.run(`CREATE INDEX IF NOT EXISTS idx_rt_pair_cache_route
+      ON rt_pair_cache(origins, destinations, out_date, ret_date, pax_desc, mock_mode)`)
+  }
+  backfillRtPairCacheRoutes(db)
 }
 
 function migratePriceVerificationV2(db: Database) {
@@ -32,6 +74,9 @@ function migrate(db: Database) {
   db.run('PRAGMA foreign_keys = ON')
   migratePriceVerificationV2(db)   // must run before SCHEMA_V1 recreates the table
   db.exec(SCHEMA_V1)
+  migrateSearchRunPaxDesc(db)
+  migrateRtPairCache(db)
+  migratePriceVerificationCachedPrice(db)
   syncRegionCatalog(db)
   seedRegionsIfEmpty(db)
   migrateRegionModelV2(db)
@@ -44,11 +89,17 @@ export function schedulePersist(db: Database) {
   if (persistTimer) clearTimeout(persistTimer)
   persistTimer = setTimeout(() => {
     persistTimer = null
-    void persistNow(db)
-  }, 400)
+    const run = () => void persistNow(db)
+    if (typeof requestIdleCallback === 'function') {
+      requestIdleCallback(run, { timeout: 4000 })
+    } else {
+      void run()
+    }
+  }, 1200)
 }
 
 export async function persistNow(db: Database) {
+  await new Promise<void>((r) => setTimeout(r, 0))
   const data = db.export()
   await idbSaveSqlite(data)
 }
@@ -72,6 +123,17 @@ export async function resetFlightDatabase() {
   persistTimer = null
   const SQL = await getSql()
   const db = new SQL.Database()
+  migrate(db)
+  dbPromise = Promise.resolve(db)
+  await persistNow(db)
+}
+
+/** Replace in-browser DB with a downloaded .sqlite file (e.g. after Download DB from another machine). */
+export async function restoreFlightDatabaseFromBytes(bytes: Uint8Array) {
+  if (persistTimer) clearTimeout(persistTimer)
+  persistTimer = null
+  const SQL = await getSql()
+  const db = new SQL.Database(bytes)
   migrate(db)
   dbPromise = Promise.resolve(db)
   await persistNow(db)

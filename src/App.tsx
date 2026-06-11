@@ -1,22 +1,22 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useDeferredValue, useMemo, useRef, useState, startTransition } from 'react'
 import countryToAirports from './data/countryToAirports.json'
 import airlineDirectory from './data/airlinesByIata.json'
 import airlinesMetaJson from './data/airlinesMeta.json'
 import { mergeRegionDefaults, REGION_IDS_IN_UI_ORDER, type RegionId } from './data/regions'
 import { AirportMultiSelect } from './components/AirportMultiSelect'
 import { AirlineFilterPanel, type AirlinesMeta } from './components/AirlineFilterPanel'
+import { resolveAirlineFilterKeyToIata } from './lib/airlineMetaLookup'
 import { DurationHistogramFilters } from './components/DurationHistogramFilters'
 import { PriceHistogramFilter } from './components/PriceHistogramFilter'
 import { LayoverRegionsPanel } from './components/LayoverRegionsPanel'
 import { ResultsList } from './components/ResultsList'
+import { ResultsViewSwitcher } from './components/ResultsViewSwitcher'
 import { ResultsRouteMap, type MapSoloFocus } from './components/ResultsRouteMap'
-import { SearchSectionSummary } from './components/SearchSectionSummary'
 import { SettingsModal } from './components/SettingsModal'
 import { StopsFilterBlock } from './components/StopsFilterBlock'
 import { AircraftFilterBlock } from './components/AircraftFilterBlock'
 import { FilterChip } from './components/FilterChip'
 import { TakeoffLandingHistogramFilters } from './components/TakeoffLandingHistogramFilters'
-import { SearchSummaryBar } from './components/SearchSummaryBar'
 import { SavedSearchesPanel } from './components/SavedSearchesPanel'
 import { usePersistedSettings } from './hooks/usePersistedSettings'
 import { useFlightDb } from './hooks/useFlightDb'
@@ -29,12 +29,14 @@ import {
   passesAircraftFilter,
   type AircraftMatchMode,
   dedupeDisplayByWaypoint,
+  dedupeDisplayBySchedule,
   sortItineraries,
   itineraryScheduleKey,
   type HourFieldStrings,
   type PriceFieldStrings,
   type FilterState,
   type SortMode,
+  type DedupeMode,
 } from './lib/filters'
 import { itineraryInsightStats } from './lib/resultStats'
 import { itineraryCountsByAirline } from './lib/resultInsights'
@@ -42,18 +44,103 @@ import type { NormalizedItinerary } from './lib/types'
 import {
   searchDirection,
   searchPriceWindow,
+  dedupeRoundTripCombos,
+  searchPriceWindowRoundTrip,
+  refreshFilteredReturns,
+  runAirlineTargetedScan,
   dateRange as pwDateRange,
   dateWindow,
   type SearchFlightInput,
   type SerpSearchDebugBundle,
   type PriceWindowSearchInput,
   type PriceWindowPerDateEntry,
+  type PriceWindowRoundTripPartial,
 } from './services/searchFlights'
+import {
+  buildPriceWindowFromRoundTripCombos,
+  buildPriceWindowShellFromPairMeta,
+  filterRoundTripCombos,
+  mergePriceWindowResults,
+  outboundItinerariesForCell,
+  returnItinerariesForCell,
+} from './lib/roundTripPricing'
+import {
+  loadPriceWindowSearchMode,
+  PW_BALANCED_CLICK_RESERVE,
+  type PriceWindowSearchMode,
+} from './lib/priceWindowSearchMode'
+import { formatPriceWindowRoundTripStatus } from './lib/priceWindowSearchStatus'
+import { discoveryListsFromCombos } from './lib/discoveryRoundTrip'
+import { storedToDeepenState } from './lib/storedRoundTripPair'
+import { buildFilteredRoundTripDatePairs } from './lib/priceWindowPairFilters'
+import { pairMetaFromInternal, pairMetaMapFromList, routeKeysFromPairMeta, type RoundTripPairDeepenState, type RoundTripPairMeta } from './lib/roundTripPairMeta'
+import {
+  buildRtFilterDistributionPool,
+  buildRtFilterPool,
+  buildDeepenStatesByOutDate,
+  dedupeRtPoolItineraries,
+  filterPairMetaListForDisplay,
+  passesRtOutboundLegFilter,
+  passesRtReturnLegFilter,
+  reorderDeepenStateForLegFilters,
+} from './lib/rtFilterPool'
+import type { SearchProgressState } from './lib/searchProgress'
+import {
+  estimatePriceWindowSerpQueries,
+  estimatePwTrancheSerpQueries,
+  formatSerpThrottleHelp,
+} from './lib/serpQueryEstimate'
+import { effectivePwHourLimit, resolvePwSearchTranche } from './lib/pwSearchTranche'
+import {
+  formatTimeSinceSearch,
+  loadPwLastSearchAt,
+  recordPwLastSearchAt,
+} from './lib/pwLastSearchTime'
+import {
+  clearSerpSearchStop,
+  createSerpHourBudget,
+  requestSerpSearchStop,
+  SERP_HOURLY_LIMIT_DEFAULT,
+  setActiveSerpHourBudget,
+} from './lib/serpHourBudget'
+import {
+  computeRefreshStats,
+  makeComboKey,
+  snapshotCombos,
+  type ComboSnapshot,
+  type RefreshRunStats,
+} from './lib/pwRefreshStats'
+import {
+  formatActivityEvent,
+  formatReturnFetchTokenNote,
+  formatSearchProgress,
+  type SearchActivityEvent,
+} from './lib/searchProgress'
+import { setSerpApiMinIntervalMs } from './lib/serpApiQueue'
+import type { RoundTripCombo } from './lib/roundTripTypes'
+import {
+  roundTripCombosFromItineraries,
+} from './db/searchRepo'
 import { mergePerDateUnique } from './lib/pipeline'
-import { buildPriceWindowResult, reverseRouteKey, type PriceWindowResult } from './lib/routeGrouping'
+import { buildPriceWindowResult } from './lib/routeGrouping'
+import { pickPwReturnForOutbound } from './lib/pwReturnAutoPick'
+import {
+  filterPairMetaListToBounds,
+  filterRoundTripCombosToBounds,
+  isDatePairInBounds,
+  type PriceWindowDateBounds,
+} from './lib/priceOverrides'
+import { buildRtTokenPriceIndex } from './lib/rtTokenRoutePrice'
 import { PriceWindowPanel } from './components/PriceWindowPanel'
 import { DateHeatmapPanel } from './components/DateHeatmapPanel'
+import { HeatmapQualityFilterBar } from './components/HeatmapQualityFilter'
+import {
+  computePanelQualityTotals,
+  emptyHeatmapQualityTotals,
+  type HeatmapCellQuality,
+} from './lib/heatmapCellQuality'
 import { buildSerpDownloadPayload, downloadJson } from './lib/serpDebugExport'
+import { buildSerpCapturePersistPayload } from './lib/serpCaptureSave'
 import { passesTimeBucketFilter, type TimeOfDayBucket } from './lib/timeBuckets'
 import {
   parseTakeoffLandingBounds,
@@ -67,13 +154,35 @@ import { inferAircraftManufacturer } from './lib/aircraftManufacturer'
 import { savedSearchTitleFromPayload } from './lib/savedSearchLabels'
 import { OTHER_HUBS_REGION_ID, unmappedLayoverHubStats } from './lib/unmappedLayoverHubs'
 import type { SearchHistoryRow, SearchHistorySnapshotV1 } from './db/searchHistoryTypes'
+import type { SearchCacheParts } from './db/searchHash'
+import {
+  clampPaxCounts,
+  DEFAULT_PAX_COUNTS,
+  formatPaxDesc,
+  formatPaxSummary,
+} from './lib/paxDesc'
 import type { SavedResultPayloadV1, SavedResultPayloadV2 } from './db/savedResultTypes'
 import { SavedRoundTripsList } from './components/SavedRoundTripsList'
 import type { SavedSearchPayloadV1 } from './db/savedSearchTypes'
 import { ConfigPresetsBar } from './components/ConfigPresetsBar'
-import { SerpApiUsageChip } from './components/SerpApiUsageChip'
+import { PriceWindowSearchConfirmModal } from './components/PriceWindowSearchConfirmModal'
+import { PriceWindowPairFiltersFields } from './components/PriceWindowPairFiltersFields'
+import {
+  formatPairFilterStatsLine,
+  loadPriceWindowPairFilters,
+  normalizePriceWindowPairFilters,
+  savePriceWindowPairFilters,
+  type PriceWindowPairFilters,
+} from './lib/priceWindowPairFilters'
+import {
+  loadRoundTripSortMode,
+  saveRoundTripSortMode,
+  sortModeFromFlags,
+  sortModeToFlags,
+  type RoundTripSortMode,
+} from './lib/roundTripSortMode'
 import { ErrorBoundary } from './components/ErrorBoundary'
-import { useConfigPresets } from './hooks/useConfigPresets'
+import { readDefaultConfigPreset, readBootConfigSnapshot, normalizeConfigSnapshot, normalizeFilterSnapshot, useConfigPresets } from './hooks/useConfigPresets'
 import { useSerpApiUsage } from './hooks/useSerpApiUsage'
 import type { FilterSnapshot, DateSnapshot, ConfigSnapshot } from './lib/filterPresetTypes'
 
@@ -142,6 +251,24 @@ const DISPLAY_TZ_OPTIONS: { value: string; label: string }[] = [
   { value: 'Asia/Kolkata', label: 'India (IST)' },
 ]
 
+/** Estimated API call breakdown for a "Refresh filtered returns" run. */
+type RefreshEstimate = {
+  /** Date pairs in range with no deepen state or no ranked entries → outbound scan needed. */
+  pairsNeedingScan: number
+  /** API calls for pair scans (1 per pair, or 2 when sort mode is 'both'). */
+  pairScanCalls: number
+  /** Filter-passing departure tokens in pairs that have ranked entries but zero combos. */
+  newReturnTokens: number
+  /** Filter-passing departure tokens in pairs with existing combos (cleared + re-fetched). */
+  refreshTokens: number
+  totalCalls: number
+}
+
+function fmtMoney(n: number | null, currency: string): string {
+  if (n == null) return '—'
+  return new Intl.NumberFormat('en-US', { style: 'currency', currency, maximumFractionDigits: 0 }).format(n)
+}
+
 export default function App() {
   const { settings, update } = usePersistedSettings()
   const {
@@ -159,7 +286,12 @@ export default function App() {
     persistSearch,
     loadCached,
     loadCachedSplitFallback,
+    loadRtPairCacheEntry,
+    loadRtPairCacheBatchEntries,
+    rtPairCacheRouteStatsFor,
+    persistRoundTripPairs,
     downloadDb,
+    restoreDbFromFile,
     resetEntireDb,
     saveSerpApiSearchCapture,
     getSerpCaptureRows,
@@ -185,7 +317,6 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [airports, setAirports] = useState<AirportRow[] | null>(null)
   const [hasSearched, setHasSearched] = useState(false)
-  const [airlineExcludedCodes, setAirlineExcludedCodes] = useState(() => new Set<string>())
 
   useEffect(() => {
     void import('./data/airports.json').then((m) => {
@@ -193,72 +324,177 @@ export default function App() {
     })
   }, [])
 
-  const [origins, setOrigins] = useState<string[]>(['PHL', 'EWR', 'JFK', 'LGA'])
-  const [destinations, setDestinations] = useState<string[]>(['MAA', 'TRV', 'IXM', 'BLR', 'COK'])
-  const [tripType, setTripType] = useState<'oneway' | 'round'>('oneway')
-  const [outboundDate, setOutboundDate] = useState('2026-07-09')
-  const [outboundEnd, setOutboundEnd] = useState('2026-07-09')
-  const [returnDate, setReturnDate] = useState('2026-07-19')
-  const [returnEnd, setReturnEnd] = useState('2026-07-19')
-  const [outHours, setOutHours] = useState<HourFieldStrings>({ ...EMPTY_HOURS })
-  const [retHours, setRetHours] = useState<HourFieldStrings>({ ...EMPTY_HOURS })
-  const [outPrice, setOutPrice] = useState<PriceFieldStrings>({ ...EMPTY_PRICE })
-  const [retPrice, setRetPrice] = useState<PriceFieldStrings>({ ...EMPTY_PRICE })
-  const [outTimeRange, setOutTimeRange] = useState<TimeRangeFieldStrings>({ ...EMPTY_TIME_RANGE })
-  const [retTimeRange, setRetTimeRange] = useState<TimeRangeFieldStrings>({ ...EMPTY_TIME_RANGE })
-  const [outLegDurationMatch, setOutLegDurationMatch] = useState<LegDurationMatchMode>('all')
-  const [retLegDurationMatch, setRetLegDurationMatch] = useState<LegDurationMatchMode>('all')
-  const [outStopsMin, setOutStopsMin] = useState('')
-  const [outStopsMax, setOutStopsMax] = useState('')
-  const [retStopsMin, setRetStopsMin] = useState('')
-  const [retStopsMax, setRetStopsMax] = useState('')
-  const [returnCustomFilters, setReturnCustomFilters] = useState(false)
-  const [layoverRegionOn, setLayoverRegionOn] = useState<Record<RegionId, boolean>>(() => {
-    const o = {} as Record<RegionId, boolean>
-    for (const k of REGION_IDS_IN_UI_ORDER) o[k] = true
-    return o
-  })
-  const [layoverAirportOff, setLayoverAirportOff] = useState<Set<string>>(() => new Set())
+  const [bootSnapshot] = useState(() => readBootConfigSnapshot())
+  const [airlineExcludedCodes, setAirlineExcludedCodes] = useState(
+    () => new Set(bootSnapshot.airlineExcludedCodes),
+  )
+  const [configPresetId, setConfigPresetId] = useState(
+    () => readDefaultConfigPreset()?.id ?? '',
+  )
+  const [configPresetRevision, setConfigPresetRevision] = useState(0)
+  const [origins, setOrigins] = useState<string[]>(() =>
+    bootSnapshot.origins.length > 0 ? [...bootSnapshot.origins] : ['PHL', 'EWR', 'JFK', 'LGA'],
+  )
+  const [destinations, setDestinations] = useState<string[]>(() =>
+    bootSnapshot.destinations.length > 0 ? [...bootSnapshot.destinations] : ['MAA', 'TRV', 'IXM', 'BLR', 'COK'],
+  )
+  const [tripType, setTripType] = useState<'oneway' | 'round'>(() => bootSnapshot.tripType ?? 'oneway')
+  const [outboundDate, setOutboundDate] = useState(
+    () => bootSnapshot.outboundDate || '2026-07-09',
+  )
+  const [outboundEnd, setOutboundEnd] = useState(
+    () => bootSnapshot.outboundEnd || bootSnapshot.outboundDate || '2026-07-09',
+  )
+  const [returnDate, setReturnDate] = useState(
+    () => bootSnapshot.returnDate || '2026-07-19',
+  )
+  const [returnEnd, setReturnEnd] = useState(
+    () => bootSnapshot.returnEnd || bootSnapshot.returnDate || '2026-07-19',
+  )
+  const [adultCount, setAdultCount] = useState(
+    () => bootSnapshot.adultCount ?? DEFAULT_PAX_COUNTS.adults,
+  )
+  const [childrenCount, setChildrenCount] = useState(
+    () => bootSnapshot.childrenCount ?? DEFAULT_PAX_COUNTS.children,
+  )
+  const [cabinClass, setCabinClass] = useState<number>(
+    () => bootSnapshot.cabinClass ?? 1,
+  )
+  const [outHours, setOutHours] = useState<HourFieldStrings>(() => ({ ...bootSnapshot.outHours }))
+  const [retHours, setRetHours] = useState<HourFieldStrings>(() => ({ ...bootSnapshot.retHours }))
+  const [outPrice, setOutPrice] = useState<PriceFieldStrings>(() => ({ ...bootSnapshot.outPrice }))
+  const [retPrice, setRetPrice] = useState<PriceFieldStrings>(() => ({ ...bootSnapshot.retPrice }))
+  const [outTimeRange, setOutTimeRange] = useState<TimeRangeFieldStrings>(() => ({ ...bootSnapshot.outTimeRange }))
+  const [retTimeRange, setRetTimeRange] = useState<TimeRangeFieldStrings>(() => ({ ...bootSnapshot.retTimeRange }))
+  const [outLegDurationMatch, setOutLegDurationMatch] = useState<LegDurationMatchMode>(
+    () => bootSnapshot.outLegDurationMatch,
+  )
+  const [retLegDurationMatch, setRetLegDurationMatch] = useState<LegDurationMatchMode>(
+    () => bootSnapshot.retLegDurationMatch,
+  )
+  const [outStopsMin, setOutStopsMin] = useState(() => bootSnapshot.outStopsMin)
+  const [outStopsMax, setOutStopsMax] = useState(() => bootSnapshot.outStopsMax)
+  const [retStopsMin, setRetStopsMin] = useState(() => bootSnapshot.retStopsMin)
+  const [retStopsMax, setRetStopsMax] = useState(() => bootSnapshot.retStopsMax)
+  const [returnCustomFilters, setReturnCustomFilters] = useState(() => bootSnapshot.returnCustomFilters)
+  const [layoverRegionOn, setLayoverRegionOn] = useState<Record<RegionId, boolean>>(() => ({ ...bootSnapshot.layoverRegionOn }))
+  const [layoverAirportOff, setLayoverAirportOff] = useState<Set<string>>(
+    () => new Set(bootSnapshot.layoverAirportOff),
+  )
   /**
    * When false, layover geography is not applied (all hubs allowed). Turning on any region/airport
    * control sets this true so partial “include” lists cannot zero out the whole grid by mistake.
    */
-  const [layoverGeoFilterActive, setLayoverGeoFilterActive] = useState(false)
+  const [layoverGeoFilterActive, setLayoverGeoFilterActive] = useState(() => bootSnapshot.layoverGeoFilterActive)
   const [mapHubFilter, setMapHubFilter] = useState<Set<string>>(() => new Set())
   const [mapRouteFilter, setMapRouteFilter] = useState<Set<string> | null>(null)
   /** Result card “Map” → highlight one itinerary on the top map (no inline map). */
   const [mapSoloFocus, setMapSoloFocus] = useState<MapSoloFocus | null>(null)
   const routeMapWrapRef = useRef<HTMLDivElement>(null)
   const defaultSearchAppliedRef = useRef(false)
-  const [excludeTechnical, setExcludeTechnical] = useState(false)
-  const [showOpenJaw, setShowOpenJaw] = useState(true)
-  const [sortOut, setSortOut] = useState<SortMode>('duration')
-  const [sortReturn, setSortReturn] = useState<SortMode>('duration')
+  const [excludeTechnical, setExcludeTechnical] = useState(() => bootSnapshot.excludeTechnical)
+  const [showOpenJaw, setShowOpenJaw] = useState(() => bootSnapshot.showOpenJaw)
+  const [sortOut, setSortOut] = useState<SortMode>(() => bootSnapshot.sortOut)
+  const [sortReturn, setSortReturn] = useState<SortMode>(() => bootSnapshot.sortReturn)
   /** API = live SerpApi (+ save to SQLite). DB = load cached snapshot only (same hash as API runs). */
   const [searchSource, setSearchSource] = useState<'api' | 'db'>('api')
-  const [timeBucketsOut, setTimeBucketsOut] = useState<Set<TimeOfDayBucket>>(new Set())
-  const [timeBucketsRet, setTimeBucketsRet] = useState<Set<TimeOfDayBucket>>(new Set())
-  const [displayTimezone, setDisplayTimezone] = useState('')
+  const [timeBucketsOut, setTimeBucketsOut] = useState<Set<TimeOfDayBucket>>(
+    () => new Set(bootSnapshot.timeBucketsOut),
+  )
+  const [timeBucketsRet, setTimeBucketsRet] = useState<Set<TimeOfDayBucket>>(
+    () => new Set(bootSnapshot.timeBucketsRet),
+  )
+  const [displayTimezone, setDisplayTimezone] = useState(
+    () => bootSnapshot.displayTimezone ?? '',
+  )
 
   const [searchGoal, setSearchGoal] = useState<'discovery' | 'priceWindow'>('discovery')
-  const [pwOutResult, setPwOutResult] = useState<PriceWindowResult | null>(null)
-  const [pwRetResult, setPwRetResult] = useState<PriceWindowResult | null>(null)
   const [pwOutboundSel, setPwOutboundSel] = useState<{ routeKey: string; date: string; pickedIdx?: number; selectedItinerary?: NormalizedItinerary } | null>(null)
   const [pwReturnSel, setPwReturnSel] = useState<{ routeKey: string; date: string; pickedIdx?: number; selectedItinerary?: NormalizedItinerary } | null>(null)
   const [pwRawOutPerDate, setPwRawOutPerDate] = useState<PriceWindowPerDateEntry[]>([])
   const [pwRawRetPerDate, setPwRawRetPerDate] = useState<PriceWindowPerDateEntry[]>([])
+  const [pwRoundTripCombos, setPwRoundTripCombos] = useState<RoundTripCombo[]>([])
+  const [pwRoundTripPairMeta, setPwRoundTripPairMeta] = useState<RoundTripPairMeta[]>([])
+  const [pwRoundTripDeepenStates, setPwRoundTripDeepenStates] = useState<RoundTripPairDeepenState[]>([])
+  const pwDeepenStatesRef = useRef(pwRoundTripDeepenStates)
+  useEffect(() => {
+    pwDeepenStatesRef.current = pwRoundTripDeepenStates
+  }, [pwRoundTripDeepenStates])
+  const pwPartialSnapRef = useRef<PriceWindowRoundTripPartial | null>(null)
+  const pwPartialUiTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const [pwRtSortMode, setPwRtSortMode] = useState<RoundTripSortMode>(loadRoundTripSortMode)
+  const [pwSearchMode] = useState<PriceWindowSearchMode>(loadPriceWindowSearchMode)
+  const [pwPairFilters, setPwPairFilters] = useState<PriceWindowPairFilters>(() =>
+    bootSnapshot.pwPairFilters
+      ? normalizePriceWindowPairFilters(bootSnapshot.pwPairFilters)
+      : loadPriceWindowPairFilters(),
+  )
+  const [pwSearchConfirmOpen, setPwSearchConfirmOpen] = useState(false)
+  const [pwReplaceOutbound, setPwReplaceOutbound] = useState(false)
+  const [pwRefreshLoading, setPwRefreshLoading] = useState(false)
+  const [pwRefreshStats, setPwRefreshStats] = useState<RefreshRunStats | null>(null)
+  /** Targeted airline scan (uses airlines still allowed in the filter panel). */
+  const [pwAirlineScanLoading, setPwAirlineScanLoading] = useState(false)
+  /** When true, airline refresh re-fetches returns from existing outbound tokens only. */
+  const [pwAirlineScanReturnOnly, setPwAirlineScanReturnOnly] = useState(false)
+  /** null = idle, number = confirm pending (shows inline "Clear N combos?" prompt) */
+  const [pwClearConfirmCount, setPwClearConfirmCount] = useState<number | null>(null)
+  /** null = idle, estimate = refresh confirm pending (shows call breakdown + Confirm/Cancel). */
+  const [pwRefreshEstimate, setPwRefreshEstimate] = useState<RefreshEstimate | null>(null)
+  /** Rolling "last event" shown in SearchSummaryBar while a search is running. */
+  const [pwActivityMessage, setPwActivityMessage] = useState<string | null>(null)
+  /**
+   * Set of combo keys seen so far in the current search/refresh run.
+   * Populated at run start; new entries trigger activity messages.
+   */
+  const seenComboKeysRef = useRef(new Set<string>())
+  /** Snapshot taken at the start of a refresh run for price-delta activity messages. */
+  const refreshBeforeSnapRef = useRef<ComboSnapshot>(new Map())
+  /** Total estimated API calls for the current/upcoming refresh run (set by handleRefreshEstimate). */
+  const pwRefreshEstimateTotalRef = useRef<number>(0)
+  const [heatmapQualityFilter, setHeatmapQualityFilter] = useState<Set<HeatmapCellQuality>>(
+    () => new Set(),
+  )
+  const toggleHeatmapQualityFilter = useCallback((q: HeatmapCellQuality) => {
+    setHeatmapQualityFilter((prev) => {
+      const next = new Set(prev)
+      if (next.has(q)) next.delete(q)
+      else next.add(q)
+      return next
+    })
+  }, [])
+  const [_pwLastSearchAgo, setPwLastSearchAgo] = useState<string | null>(() =>
+    formatTimeSinceSearch(loadPwLastSearchAt()),
+  )
+
+  useEffect(() => {
+    const raw = localStorage.getItem('flight-itinerary-discovery-serp-interval-ms')
+    const ms = raw != null ? Number(raw) : 1800
+    setSerpApiMinIntervalMs(Number.isFinite(ms) ? ms : 1800)
+  }, [])
+
+  useEffect(() => {
+    const tick = () => setPwLastSearchAgo(formatTimeSinceSearch(loadPwLastSearchAt()))
+    tick()
+    const id = setInterval(tick, 60_000)
+    return () => clearInterval(id)
+  }, [])
 
   const [loading, setLoading] = useState(false)
-  const [searchProgress, setSearchProgress] = useState<{ phase: string; current: number; total: number } | null>(null)
+  const [searchProgress, setSearchProgress] = useState<SearchProgressState | null>(null)
   const [searchRefreshKey, setSearchRefreshKey] = useState(0)
   const [error, setError] = useState<string | null>(null)
   const [rawOut, setRawOut] = useState<NormalizedItinerary[]>([])
   const [rawReturn, setRawReturn] = useState<NormalizedItinerary[]>([])
   const [cacheHint, setCacheHint] = useState<string | null>(null)
-  const [uniqueRoutesOnly, setUniqueRoutesOnly] = useState(true)
+  const [dedupeMode, setDedupeMode] = useState<DedupeMode>(() => bootSnapshot.dedupeMode ?? 'route')
   const [searchPanelOpen, setSearchPanelOpen] = useState(true)
-  const [aircraftSelectedCodes, setAircraftSelectedCodes] = useState<string[]>([])
-  const [aircraftMatchMode, setAircraftMatchMode] = useState<AircraftMatchMode>('any')
+  const [aircraftSelectedCodes, setAircraftSelectedCodes] = useState<string[]>(
+    () => [...bootSnapshot.aircraftSelectedCodes],
+  )
+  const [aircraftMatchMode, setAircraftMatchMode] = useState<AircraftMatchMode>(
+    () => bootSnapshot.aircraftMatchMode,
+  )
   /** Last live/mock SerpApi responses (per flex date) for debugging — not set when loading from SQLite only. */
   const [serpCapture, setSerpCapture] = useState<{
     outbound: SerpSearchDebugBundle | null
@@ -295,7 +531,7 @@ export default function App() {
     layoverGeoFilterActive,
     excludeTechnical,
     showOpenJaw,
-    uniqueRoutesOnly,
+    dedupeMode,
     returnCustomFilters,
     aircraftSelectedCodes,
     aircraftMatchMode,
@@ -306,78 +542,173 @@ export default function App() {
     outHours, retHours, outPrice, retPrice, outTimeRange, retTimeRange,
     outLegDurationMatch, retLegDurationMatch, timeBucketsOut, timeBucketsRet,
     layoverRegionOn, layoverAirportOff, layoverGeoFilterActive,
-    excludeTechnical, showOpenJaw, uniqueRoutesOnly, returnCustomFilters,
+    excludeTechnical, showOpenJaw, dedupeMode, returnCustomFilters,
     aircraftSelectedCodes, aircraftMatchMode, sortOut, sortReturn,
   ])
 
   const currentDateSnapshot = useMemo((): DateSnapshot => ({
+    origins: [...origins],
+    destinations: [...destinations],
     tripType,
     outboundDate,
     outboundEnd,
     returnDate,
     returnEnd,
-  }), [tripType, outboundDate, outboundEnd, returnDate, returnEnd])
+    adultCount,
+    childrenCount,
+    cabinClass,
+  }), [
+    origins,
+    destinations,
+    tripType,
+    outboundDate,
+    outboundEnd,
+    returnDate,
+    returnEnd,
+    adultCount,
+    childrenCount,
+    cabinClass,
+  ])
+
+  const paxCounts = useMemo(
+    () => clampPaxCounts({ adults: adultCount, children: childrenCount }),
+    [adultCount, childrenCount],
+  )
+  const paxDesc = useMemo(() => formatPaxDesc(paxCounts), [paxCounts])
+  const passengerSummary = useMemo(() => formatPaxSummary(paxCounts), [paxCounts])
+
+  const withPax = useCallback(
+    (parts: Omit<SearchCacheParts, 'paxDesc'>): SearchCacheParts => ({ ...parts, paxDesc }),
+    [paxDesc],
+  )
 
   const currentConfigSnapshot = useMemo((): ConfigSnapshot => ({
     ...currentFilterSnapshot,
     ...currentDateSnapshot,
-  }), [currentFilterSnapshot, currentDateSnapshot])
+    displayTimezone,
+    pwPairFilters,
+  }), [currentFilterSnapshot, currentDateSnapshot, displayTimezone, pwPairFilters])
 
   /** Apply the filter portion of a config snapshot. */
   const applyFilterPreset = useCallback((f: FilterSnapshot) => {
-    setAirlineExcludedCodes(new Set(f.airlineExcludedCodes))
-    setOutStopsMin(f.outStopsMin)
-    setOutStopsMax(f.outStopsMax)
-    setRetStopsMin(f.retStopsMin)
-    setRetStopsMax(f.retStopsMax)
-    setOutHours({ ...f.outHours })
-    setRetHours({ ...f.retHours })
-    setOutPrice({ ...f.outPrice })
-    setRetPrice({ ...f.retPrice })
-    setOutTimeRange({ ...f.outTimeRange })
-    setRetTimeRange({ ...f.retTimeRange })
-    setOutLegDurationMatch(f.outLegDurationMatch)
-    setRetLegDurationMatch(f.retLegDurationMatch)
-    setTimeBucketsOut(new Set(f.timeBucketsOut))
-    setTimeBucketsRet(new Set(f.timeBucketsRet))
-    setLayoverRegionOn({ ...f.layoverRegionOn })
-    setLayoverAirportOff(new Set(f.layoverAirportOff))
-    setLayoverGeoFilterActive(f.layoverGeoFilterActive)
-    setExcludeTechnical(f.excludeTechnical)
-    setShowOpenJaw(f.showOpenJaw)
-    setUniqueRoutesOnly(f.uniqueRoutesOnly)
-    setReturnCustomFilters(f.returnCustomFilters)
-    setAircraftSelectedCodes(f.aircraftSelectedCodes)
-    setAircraftMatchMode(f.aircraftMatchMode)
-    setSortOut(f.sortOut)
-    setSortReturn(f.sortReturn)
+    const n = normalizeFilterSnapshot(f)
+    setAirlineExcludedCodes(new Set(n.airlineExcludedCodes))
+    setOutStopsMin(n.outStopsMin)
+    setOutStopsMax(n.outStopsMax)
+    setRetStopsMin(n.retStopsMin)
+    setRetStopsMax(n.retStopsMax)
+    setOutHours({ ...n.outHours })
+    setRetHours({ ...n.retHours })
+    setOutPrice({ ...n.outPrice })
+    setRetPrice({ ...n.retPrice })
+    setOutTimeRange({ ...n.outTimeRange })
+    setRetTimeRange({ ...n.retTimeRange })
+    setOutLegDurationMatch(n.outLegDurationMatch)
+    setRetLegDurationMatch(n.retLegDurationMatch)
+    setTimeBucketsOut(new Set(n.timeBucketsOut))
+    setTimeBucketsRet(new Set(n.timeBucketsRet))
+    setLayoverRegionOn({ ...n.layoverRegionOn })
+    setLayoverAirportOff(new Set(n.layoverAirportOff))
+    setLayoverGeoFilterActive(n.layoverGeoFilterActive)
+    setExcludeTechnical(n.excludeTechnical)
+    setShowOpenJaw(n.showOpenJaw)
+    setDedupeMode(n.dedupeMode ?? 'route')
+    setReturnCustomFilters(n.returnCustomFilters)
+    setAircraftSelectedCodes(n.aircraftSelectedCodes)
+    setAircraftMatchMode(n.aircraftMatchMode)
+    setSortOut(n.sortOut)
+    setSortReturn(n.sortReturn)
   }, [])
 
   /** Apply the date portion of a config snapshot. */
   const applyDatePreset = useCallback((d: DateSnapshot) => {
+    if (Array.isArray(d.origins)) setOrigins([...d.origins])
+    if (Array.isArray(d.destinations)) setDestinations([...d.destinations])
     setTripType(d.tripType)
     setOutboundDate(d.outboundDate)
     setOutboundEnd((d.outboundEnd as string | undefined) ?? d.outboundDate)
     setReturnDate(d.returnDate)
     setReturnEnd((d.returnEnd as string | undefined) ?? d.returnDate)
+    setAdultCount(d.adultCount ?? DEFAULT_PAX_COUNTS.adults)
+    setChildrenCount(d.childrenCount ?? DEFAULT_PAX_COUNTS.children)
+    setCabinClass(d.cabinClass ?? 1)
   }, [])
+
+  /** Apply filter fields only (stops, layover, price, etc.) — not route/dates. */
+  const applyFilterFieldsFromConfig = useCallback((c: ConfigSnapshot) => {
+    const n = normalizeConfigSnapshot(c)
+    applyFilterPreset(n)
+    setDisplayTimezone(n.displayTimezone ?? '')
+    if (n.pwPairFilters) {
+      const pf = normalizePriceWindowPairFilters(n.pwPairFilters)
+      setPwPairFilters(pf)
+      savePriceWindowPairFilters(pf)
+    }
+    setConfigPresetRevision((r) => r + 1)
+  }, [applyFilterPreset])
 
   /** Apply both filter + date portions of a unified config preset. */
   const applyConfigPreset = useCallback((c: ConfigSnapshot) => {
-    applyFilterPreset(c)
-    applyDatePreset(c)
-  }, [applyFilterPreset, applyDatePreset])
+    applyFilterFieldsFromConfig(c)
+    applyDatePreset(normalizeConfigSnapshot(c))
+  }, [applyFilterFieldsFromConfig, applyDatePreset])
 
-  // Apply default config preset once on mount
-  const defaultAppliedRef = useRef(false)
+  /** Remember date fields per goal when no config preset is selected. */
+  const goalDateMemoryRef = useRef<Partial<Record<'discovery' | 'priceWindow', DateSnapshot>>>({})
+
+  const handleSearchGoalChange = useCallback(
+    (goal: 'discovery' | 'priceWindow') => {
+      if (goal === searchGoal) return
+      goalDateMemoryRef.current[searchGoal] = {
+        origins: [...origins],
+        destinations: [...destinations],
+        tripType,
+        outboundDate,
+        outboundEnd,
+        returnDate,
+        returnEnd,
+        adultCount,
+        childrenCount,
+        cabinClass,
+      }
+      setSearchGoal(goal)
+      if (configPresetId) {
+        const preset = configPresets.presets.find((p) => p.id === configPresetId)
+        if (preset) {
+          applyDatePreset(preset.config)
+          return
+        }
+      }
+      const remembered = goalDateMemoryRef.current[goal]
+      if (remembered) applyDatePreset(remembered)
+    },
+    [
+      searchGoal,
+      origins,
+      destinations,
+      tripType,
+      outboundDate,
+      outboundEnd,
+      returnDate,
+      returnEnd,
+      adultCount,
+      childrenCount,
+      cabinClass,
+      configPresetId,
+      configPresets.presets,
+      applyDatePreset,
+    ],
+  )
+
+  const defaultConfigAppliedRef = useRef(false)
   useEffect(() => {
-    if (defaultAppliedRef.current) return
-    defaultAppliedRef.current = true
-    if (configPresets.defaultPreset) {
-      applyConfigPreset(configPresets.defaultPreset.config)
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+    if (defaultConfigAppliedRef.current) return
+    defaultConfigAppliedRef.current = true
+    const def = readDefaultConfigPreset()
+    if (!def) return
+    applyConfigPreset(def.config)
+    setConfigPresetId(def.id)
+  }, [applyConfigPreset])
 
   const tzByIata = useMemo(() => {
     const m = new Map<string, string>()
@@ -424,6 +755,38 @@ export default function App() {
     [regionCountries],
   )
 
+  const deferredPwDeepenStates = useDeferredValue(pwRoundTripDeepenStates)
+  const deferredPwCombos = useDeferredValue(pwRoundTripCombos)
+
+  const pwDeepenByOutDate = useMemo(
+    () => buildDeepenStatesByOutDate(pwRoundTripDeepenStates),
+    [pwRoundTripDeepenStates],
+  )
+
+  /** Sidebar histograms: slim sample (not every ranked outbound × date pair). */
+  const pwRtFilterPool = useMemo(
+    () => buildRtFilterDistributionPool(deferredPwDeepenStates, deferredPwCombos),
+    [deferredPwDeepenStates, deferredPwCombos],
+  )
+
+  const filterPoolOut = useMemo(() => {
+    if (searchGoal === 'priceWindow' && tripType === 'round') {
+      const ow = pwRawOutPerDate.flatMap((d) => d.itineraries)
+      const merged = dedupeRtPoolItineraries([...pwRtFilterPool.outbound, ...ow])
+      if (merged.length > 0) return merged
+    }
+    return rawOut
+  }, [searchGoal, tripType, pwRtFilterPool, pwRawOutPerDate, rawOut])
+
+  const filterPoolRet = useMemo(() => {
+    if (searchGoal === 'priceWindow' && tripType === 'round') {
+      const ow = pwRawRetPerDate.flatMap((d) => d.itineraries)
+      const merged = dedupeRtPoolItineraries([...pwRtFilterPool.return, ...ow])
+      if (merged.length > 0) return merged
+    }
+    return rawReturn
+  }, [searchGoal, tripType, pwRtFilterPool, pwRawRetPerDate, rawReturn])
+
   const allowedLayoverAirports = useMemo(() => {
     if (!layoverGeoFilterActive) return null
     const ids = REGION_IDS_IN_UI_ORDER
@@ -434,7 +797,7 @@ export default function App() {
       if (!layoverRegionOn[rid]) continue
       if (rid === OTHER_HUBS_REGION_ID) {
         const { hubSet } = unmappedLayoverHubStats(
-          rawOut,
+          filterPoolOut,
           airportsByIata,
           regionCountriesForLayover,
           airportUiRegions,
@@ -462,12 +825,10 @@ export default function App() {
     layoverAirportOff,
     regionCountriesForLayover,
     airportUiRegions,
-    rawOut,
+    filterPoolOut,
     airportsByIata,
   ])
 
-  const primaryDestination = destinations[0]
-  const multipleDestinations = destinations.length > 1
 
   const filterFlags = useMemo(
     () => ({
@@ -495,12 +856,12 @@ export default function App() {
         counts.set(a, (counts.get(a) ?? 0) + 1)
       }
     }
-    for (const it of rawOut) countItin(it)
-    for (const it of rawReturn) countItin(it)
+    for (const it of filterPoolOut) countItin(it)
+    for (const it of filterPoolRet) countItin(it)
     return [...counts.entries()]
       .map(([aircraft, routeCount]) => ({ aircraft, routeCount }))
       .sort((a, b) => b.routeCount - a.routeCount || a.aircraft.localeCompare(b.aircraft))
-  }, [rawOut, rawReturn])
+  }, [filterPoolOut, filterPoolRet])
 
   /** Itineraries (out + return) with ≥1 segment on an aircraft of this manufacturer. */
   const aircraftManufacturerPoolCounts = useMemo(() => {
@@ -518,29 +879,51 @@ export default function App() {
     const counts: Record<string, number> = {}
     for (const mfr of mfrs) {
       let n = 0
-      for (const it of rawOut) if (countItin(it, mfr)) n++
-      for (const it of rawReturn) if (countItin(it, mfr)) n++
+      for (const it of filterPoolOut) if (countItin(it, mfr)) n++
+      for (const it of filterPoolRet) if (countItin(it, mfr)) n++
       counts[mfr] = n
     }
     return counts
-  }, [rawOut, rawReturn, aircraftOptionsWithCounts])
+  }, [filterPoolOut, filterPoolRet, aircraftOptionsWithCounts])
 
   const airlinesFromResults = useMemo(() => {
     const set = new Set<string>()
-    for (const it of rawOut) {
+    for (const it of filterPoolOut) {
       for (const s of it.segments) {
         const c = s.airline?.trim().toUpperCase()
         if (c) set.add(c)
       }
     }
-    for (const it of rawReturn) {
+    for (const it of filterPoolRet) {
       for (const s of it.segments) {
         const c = s.airline?.trim().toUpperCase()
         if (c) set.add(c)
       }
     }
     return [...set].sort((a, b) => a.localeCompare(b))
-  }, [rawOut, rawReturn])
+  }, [filterPoolOut, filterPoolRet])
+
+  /** IATA codes for airlines still checked in the filter panel (for SerpApi `include_airlines`). */
+  const pwIncludedAirlineCodes = useMemo(() => {
+    const meta = airlinesMetaJson as AirlinesMeta
+    const codes: string[] = []
+    const seen = new Set<string>()
+    for (const raw of airlinesFromResults) {
+      if (airlineExcludedCodes.has(raw)) continue
+      const iata = resolveAirlineFilterKeyToIata(raw, meta, airlinesDict)
+      if (!iata || seen.has(iata)) continue
+      seen.add(iata)
+      codes.push(iata)
+    }
+    return codes.sort((a, b) => a.localeCompare(b))
+  }, [airlinesFromResults, airlineExcludedCodes, airlinesDict])
+
+  /** True when the user has narrowed the airline list (at least one excluded). */
+  const pwAirlineFilterNarrowed =
+    searchGoal === 'priceWindow' &&
+    tripType === 'round' &&
+    airlineExcludedCodes.size > 0 &&
+    pwIncludedAirlineCodes.length > 0
 
   const effRetHours = returnCustomFilters && tripType === 'round' ? retHours : outHours
   const effRetPrice = returnCustomFilters && tripType === 'round' ? retPrice : outPrice
@@ -654,7 +1037,8 @@ export default function App() {
       ),
     )
     list = sortItineraries(list, sortOut)
-    if (uniqueRoutesOnly) list = dedupeDisplayByWaypoint(list, sortOut)
+    if (dedupeMode === 'route') list = dedupeDisplayByWaypoint(list, sortOut)
+    else if (dedupeMode === 'schedule') list = dedupeDisplayBySchedule(list, sortOut)
     return list
   }, [
     rawOut,
@@ -663,7 +1047,7 @@ export default function App() {
     timeBucketsOut,
     tzByIata,
     airlineExcludedCodes,
-    uniqueRoutesOnly,
+    dedupeMode,
     aircraftFilterSet,
     aircraftMatchMode,
     outTakeoffLandingBounds,
@@ -691,7 +1075,8 @@ export default function App() {
       ),
     )
     list = sortItineraries(list, sortReturn)
-    if (uniqueRoutesOnly) list = dedupeDisplayByWaypoint(list, sortReturn)
+    if (dedupeMode === 'route') list = dedupeDisplayByWaypoint(list, sortReturn)
+    else if (dedupeMode === 'schedule') list = dedupeDisplayBySchedule(list, sortReturn)
     return list
   }, [
     rawReturn,
@@ -700,7 +1085,7 @@ export default function App() {
     effBucketsRet,
     tzByIata,
     airlineExcludedCodes,
-    uniqueRoutesOnly,
+    dedupeMode,
     aircraftFilterSet,
     aircraftMatchMode,
     retTakeoffLandingBounds,
@@ -763,7 +1148,8 @@ export default function App() {
       ),
     )
     list = sortItineraries(list, sortOut)
-    if (uniqueRoutesOnly) list = dedupeDisplayByWaypoint(list, sortOut)
+    if (dedupeMode === 'route') list = dedupeDisplayByWaypoint(list, sortOut)
+    else if (dedupeMode === 'schedule') list = dedupeDisplayBySchedule(list, sortOut)
     return list
   }, [
     rawOut,
@@ -772,7 +1158,7 @@ export default function App() {
     timeBucketsOut,
     tzByIata,
     airlineExcludedCodes,
-    uniqueRoutesOnly,
+    dedupeMode,
     aircraftFilterSet,
     aircraftMatchMode,
     outTakeoffLandingBounds,
@@ -800,7 +1186,8 @@ export default function App() {
       ),
     )
     list = sortItineraries(list, sortReturn)
-    if (uniqueRoutesOnly) list = dedupeDisplayByWaypoint(list, sortReturn)
+    if (dedupeMode === 'route') list = dedupeDisplayByWaypoint(list, sortReturn)
+    else if (dedupeMode === 'schedule') list = dedupeDisplayBySchedule(list, sortReturn)
     return list
   }, [
     rawReturn,
@@ -809,41 +1196,254 @@ export default function App() {
     effBucketsRet,
     tzByIata,
     airlineExcludedCodes,
-    uniqueRoutesOnly,
+    dedupeMode,
     aircraftFilterSet,
     aircraftMatchMode,
     retTakeoffLandingBounds,
   ])
 
-  // Price window: rebuild heatmap from filtered raw itineraries so left-panel filters apply
-  const pwOutResultFiltered = useMemo(() => {
-    if (!pwRawOutPerDate.length) return null
-    const filtered = pwRawOutPerDate.map(({ date, itineraries }) => ({
-      date,
-      itineraries: itineraries.filter(
-        (it) =>
-          passesItineraryFilters(it, filterOut) &&
-          passesAirlineResultFilter(it, airlineExcludedCodes) &&
-          passesAircraftFilter(it, aircraftFilterSet, aircraftMatchMode) &&
-          passesTimeBucketFilter(it, timeBucketsOut, tzByIata) &&
-          passesTakeoffTimeRange(
-            it,
-            outTakeoffLandingBounds.takeoffMin,
-            outTakeoffLandingBounds.takeoffMax,
-            tzByIata,
-          ) &&
-          passesLandingTimeRange(
-            it,
-            outTakeoffLandingBounds.landingMin,
-            outTakeoffLandingBounds.landingMax,
-            tzByIata,
-          ),
-      ),
-    }))
-    return buildPriceWindowResult(filtered)
+  const pwDateBounds = useMemo((): PriceWindowDateBounds | null => {
+    if (searchGoal !== 'priceWindow' || tripType !== 'round') return null
+    return {
+      outboundStart: outboundDate,
+      outboundEnd: outboundEnd,
+      returnStart: returnDate,
+      returnEnd: returnEnd,
+    }
+  }, [searchGoal, tripType, outboundDate, outboundEnd, returnDate, returnEnd])
+
+  const pwRoundTripCombosInWindow = useMemo(() => {
+    if (!pwDateBounds) return pwRoundTripCombos
+    return filterRoundTripCombosToBounds(pwRoundTripCombos, pwDateBounds)
+  }, [pwRoundTripCombos, pwDateBounds])
+
+  const pwRoundTripPairMetaInWindow = useMemo(() => {
+    if (!pwDateBounds) return pwRoundTripPairMeta
+    return filterPairMetaListToBounds(pwRoundTripPairMeta, pwDateBounds)
+  }, [pwRoundTripPairMeta, pwDateBounds])
+
+  const pwRtFilterOpts = useMemo(
+    () => ({
+      filterOut,
+      filterRet,
+      airlineExcludedCodes,
+      aircraftFilterSet,
+      aircraftMatchMode,
+      timeBucketsOut,
+      timeBucketsRet: effBucketsRet,
+      tzByIata,
+      outTakeoffMin: outTakeoffLandingBounds.takeoffMin,
+      outTakeoffMax: outTakeoffLandingBounds.takeoffMax,
+      outLandingMin: outTakeoffLandingBounds.landingMin,
+      outLandingMax: outTakeoffLandingBounds.landingMax,
+      retTakeoffMin: retTakeoffLandingBounds.takeoffMin,
+      retTakeoffMax: retTakeoffLandingBounds.takeoffMax,
+      retLandingMin: retTakeoffLandingBounds.landingMin,
+      retLandingMax: retTakeoffLandingBounds.landingMax,
+    }),
+    [
+      filterOut,
+      filterRet,
+      airlineExcludedCodes,
+      aircraftFilterSet,
+      aircraftMatchMode,
+      timeBucketsOut,
+      effBucketsRet,
+      tzByIata,
+      outTakeoffLandingBounds,
+      retTakeoffLandingBounds,
+    ],
+  )
+
+  const deferredPwRtFilterOpts = useDeferredValue(pwRtFilterOpts)
+
+  // Only pending when the FILTER OPTIONS themselves haven't been committed yet by the deferred
+  // render.  Deepen-state changes (search / refresh updates) intentionally do NOT hide the
+  // grid — live heatmap updates are safe because buildRtTokenPriceIndex gives O(1) cell
+  // lookups.  Including pwRoundTripDeepenStates !== deferredPwDeepenStates here would hide
+  // the grid throughout every refresh (applyPwDeepenStateList fires on every partial), which
+  // is what caused the "nothing changed in the heatmap" symptom.
+  const pwFiltersPending =
+    searchGoal === 'priceWindow' &&
+    tripType === 'round' &&
+    pwRtFilterOpts !== deferredPwRtFilterOpts
+
+  /** Hide heavy grids during cache load confirm or while deferred filters catch up.
+   *  Note: API search no longer hides the grid — live heatmap updates are now safe because
+   *  buildRtTokenPriceIndex gives O(1) cell lookups, eliminating the 60-second freeze. */
+  const hidePwResultsUi =
+    pwSearchConfirmOpen ||
+    (pwFiltersPending && searchGoal === 'priceWindow' && tripType === 'round')
+
+  const deferredPwCombosInWindow = useMemo(() => {
+    if (!pwDateBounds) return deferredPwCombos
+    return filterRoundTripCombosToBounds(deferredPwCombos, pwDateBounds)
+  }, [deferredPwCombos, pwDateBounds])
+
+  const pwRtTokenIndex = useMemo(
+    () => buildRtTokenPriceIndex(deferredPwDeepenStates, deferredPwCombosInWindow, pwDateBounds),
+    [deferredPwDeepenStates, deferredPwCombosInWindow, pwDateBounds],
+  )
+
+  const pwRtSortFlags = useMemo(() => sortModeToFlags(pwRtSortMode), [pwRtSortMode])
+
+  const setPwRtSortFromFlags = useCallback((price: boolean, duration: boolean) => {
+    const mode = sortModeFromFlags(price, duration)
+    setPwRtSortMode(mode)
+    saveRoundTripSortMode(mode)
+  }, [])
+
+  const pwHasExistingGrid = useMemo(() => {
+    if (pwRoundTripDeepenStates.length === 0) return false
+    if (!pwDateBounds) return true
+    return pwRoundTripDeepenStates.some((s) =>
+      isDatePairInBounds(s.outDate, s.retDate, pwDateBounds),
+    )
+  }, [pwRoundTripDeepenStates, pwDateBounds])
+
+  const pwSerpEstimate = useMemo(() => {
+    if (searchGoal !== 'priceWindow' || searchSource !== 'api' || settings.mockMode) return null
+    if (tripType === 'round') {
+      return estimatePwTrancheSerpQueries({
+        outboundDate,
+        outboundEnd,
+        returnDate,
+        returnEnd,
+        roundTripSortMode: pwRtSortMode,
+        pairFilters: pwPairFilters,
+        replaceOutbound: pwReplaceOutbound,
+        hasExistingGrid: pwHasExistingGrid,
+        alsoSearchOneWay: false,
+        plannedHourlySerpCalls: settings.pwHourlySerpCalls,
+        hourUsedBeforeSearch:
+          serpUsageState.status === 'ok' ? serpUsageState.data.this_hour_searches : undefined,
+      })
+    }
+    return estimatePriceWindowSerpQueries({
+      tripType,
+      outboundDate,
+      outboundEnd,
+      returnDate,
+      returnEnd,
+      alsoSearchOneWay: false,
+      roundTripSortMode: pwRtSortMode,
+      searchMode: pwSearchMode,
+      pairFilters: pwPairFilters,
+    })
   }, [
+    searchGoal,
+    searchSource,
+    settings.mockMode,
+    tripType,
+    outboundDate,
+    outboundEnd,
+    returnDate,
+    returnEnd,
+    pwRtSortMode,
+    pwSearchMode,
+    pwPairFilters,
+    pwHasExistingGrid,
+    pwReplaceOutbound,
+    settings.pwHourlySerpCalls,
+    serpUsageState,
+  ])
+
+  const pwPairFilterPreview = useMemo(() => {
+    if (searchGoal !== 'priceWindow' || tripType !== 'round') return null
+    return buildFilteredRoundTripDatePairs(
+      outboundDate,
+      outboundEnd,
+      returnDate,
+      returnEnd,
+      pwPairFilters,
+    )
+  }, [searchGoal, tripType, outboundDate, outboundEnd, returnDate, returnEnd, pwPairFilters])
+
+  const pwPairFilterStatsLine = useMemo(
+    () =>
+      pwPairFilterPreview
+        ? formatPairFilterStatsLine(pwPairFilterPreview.stats, pwPairFilters)
+        : null,
+    [pwPairFilterPreview, pwPairFilters],
+  )
+
+  const pwRoundTripFiltered = useMemo(() => {
+    if (!pwRoundTripCombosInWindow.length) return []
+    return filterRoundTripCombos(pwRoundTripCombosInWindow, deferredPwRtFilterOpts)
+  }, [pwRoundTripCombosInWindow, deferredPwRtFilterOpts])
+
+  const pwRoundTripPairMetaFiltered = useMemo(() => {
+    if (searchGoal !== 'priceWindow' || tripType !== 'round' || !pwRoundTripPairMetaInWindow.length) {
+      return pwRoundTripPairMetaInWindow
+    }
+    return filterPairMetaListForDisplay(
+      pwRoundTripPairMetaInWindow,
+      deferredPwDeepenStates,
+      deferredPwRtFilterOpts,
+    )
+  }, [
+    searchGoal,
+    tripType,
+    pwRoundTripPairMetaInWindow,
+    deferredPwDeepenStates,
+    deferredPwRtFilterOpts,
+  ])
+
+  const pwPairMetaMapFiltered = useMemo(
+    () => pairMetaMapFromList(pwRoundTripPairMetaFiltered),
+    [pwRoundTripPairMetaFiltered],
+  )
+
+  // Price window: round-trip bundles and/or one-way leg caches (filters applied)
+  const pwOutResultFiltered = useMemo(() => {
+    const oneWayOut = pwRawOutPerDate.length
+      ? buildPriceWindowResult(
+          pwRawOutPerDate.map(({ date, itineraries }) => ({
+            date,
+            itineraries: itineraries.filter(
+              (it) =>
+                passesItineraryFilters(it, filterOut) &&
+                passesAirlineResultFilter(it, airlineExcludedCodes) &&
+                passesAircraftFilter(it, aircraftFilterSet, aircraftMatchMode) &&
+                passesTimeBucketFilter(it, timeBucketsOut, tzByIata) &&
+                passesTakeoffTimeRange(
+                  it,
+                  outTakeoffLandingBounds.takeoffMin,
+                  outTakeoffLandingBounds.takeoffMax,
+                  tzByIata,
+                ) &&
+                passesLandingTimeRange(
+                  it,
+                  outTakeoffLandingBounds.landingMin,
+                  outTakeoffLandingBounds.landingMax,
+                  tzByIata,
+                ),
+            ),
+          })),
+        )
+      : null
+
+    if (pwRoundTripPairMetaFiltered.length) {
+      const shell = buildPriceWindowShellFromPairMeta(pwRoundTripPairMetaFiltered).outResult
+      if (pwRoundTripFiltered.length) {
+        const fromCombos = buildPriceWindowFromRoundTripCombos(pwRoundTripFiltered).outResult
+        return mergePriceWindowResults(shell, fromCombos)
+      }
+      if (oneWayOut) {
+        return mergePriceWindowResults(shell, oneWayOut)
+      }
+      return shell
+    }
+    if (pwRoundTripFiltered.length) {
+      return buildPriceWindowFromRoundTripCombos(pwRoundTripFiltered).outResult
+    }
+    return oneWayOut
+  }, [
+    pwRoundTripFiltered,
+    pwRoundTripPairMetaFiltered,
     pwRawOutPerDate,
     filterOut,
+    filterRet,
     airlineExcludedCodes,
     aircraftFilterSet,
     aircraftMatchMode,
@@ -853,33 +1453,54 @@ export default function App() {
   ])
 
   const pwRetResultFiltered = useMemo(() => {
-    if (!pwRawRetPerDate.length) return null
-    const filtered = pwRawRetPerDate.map(({ date, itineraries }) => ({
-      date,
-      itineraries: itineraries.filter(
-        (it) =>
-          passesItineraryFilters(it, filterRet) &&
-          passesAirlineResultFilter(it, airlineExcludedCodes) &&
-          passesAircraftFilter(it, aircraftFilterSet, aircraftMatchMode) &&
-          passesTimeBucketFilter(it, effBucketsRet, tzByIata) &&
-          passesTakeoffTimeRange(
-            it,
-            retTakeoffLandingBounds.takeoffMin,
-            retTakeoffLandingBounds.takeoffMax,
-            tzByIata,
-          ) &&
-          passesLandingTimeRange(
-            it,
-            retTakeoffLandingBounds.landingMin,
-            retTakeoffLandingBounds.landingMax,
-            tzByIata,
-          ),
-      ),
-    }))
-    return buildPriceWindowResult(filtered)
+    const oneWayRet = pwRawRetPerDate.length
+      ? buildPriceWindowResult(
+          pwRawRetPerDate.map(({ date, itineraries }) => ({
+            date,
+            itineraries: itineraries.filter(
+              (it) =>
+                passesItineraryFilters(it, filterRet) &&
+                passesAirlineResultFilter(it, airlineExcludedCodes) &&
+                passesAircraftFilter(it, aircraftFilterSet, aircraftMatchMode) &&
+                passesTimeBucketFilter(it, effBucketsRet, tzByIata) &&
+                passesTakeoffTimeRange(
+                  it,
+                  retTakeoffLandingBounds.takeoffMin,
+                  retTakeoffLandingBounds.takeoffMax,
+                  tzByIata,
+                ) &&
+                passesLandingTimeRange(
+                  it,
+                  retTakeoffLandingBounds.landingMin,
+                  retTakeoffLandingBounds.landingMax,
+                  tzByIata,
+                ),
+            ),
+          })),
+        )
+      : null
+
+    if (pwRoundTripPairMetaFiltered.length) {
+      const shell = buildPriceWindowShellFromPairMeta(pwRoundTripPairMetaFiltered).retResult
+      if (pwRoundTripFiltered.length) {
+        const fromCombos = buildPriceWindowFromRoundTripCombos(pwRoundTripFiltered).retResult
+        return mergePriceWindowResults(shell, fromCombos)
+      }
+      if (oneWayRet) {
+        return mergePriceWindowResults(shell, oneWayRet)
+      }
+      return shell
+    }
+    if (pwRoundTripFiltered.length) {
+      return buildPriceWindowFromRoundTripCombos(pwRoundTripFiltered).retResult
+    }
+    return oneWayRet
   }, [
+    pwRoundTripFiltered,
+    pwRoundTripPairMetaFiltered,
     pwRawRetPerDate,
     filterRet,
+    filterOut,
     airlineExcludedCodes,
     aircraftFilterSet,
     aircraftMatchMode,
@@ -888,19 +1509,242 @@ export default function App() {
     retTakeoffLandingBounds,
   ])
 
+  const heatmapQualityInputs = useMemo(
+    () => ({
+      out: pwOutResultFiltered,
+      ret: pwRetResultFiltered,
+      combos: pwRoundTripFiltered,
+      meta: pwPairMetaMapFiltered,
+      bounds: pwDateBounds,
+      deepen: deferredPwDeepenStates,
+      index: pwRtTokenIndex,
+    }),
+    [
+      pwOutResultFiltered,
+      pwRetResultFiltered,
+      pwRoundTripFiltered,
+      pwPairMetaMapFiltered,
+      pwDateBounds,
+      deferredPwDeepenStates,
+      pwRtTokenIndex,
+    ],
+  )
+  const deferredHeatmapQualityInputs = useDeferredValue(heatmapQualityInputs)
+
+  const heatmapQualityTotals = useMemo(() => {
+    if (hidePwResultsUi) return emptyHeatmapQualityTotals()
+    return computePanelQualityTotals(
+      deferredHeatmapQualityInputs.out,
+      deferredHeatmapQualityInputs.ret,
+      priceVerifications,
+      deferredHeatmapQualityInputs.combos,
+      deferredHeatmapQualityInputs.meta,
+      deferredHeatmapQualityInputs.bounds,
+      deferredHeatmapQualityInputs.deepen,
+      deferredHeatmapQualityInputs.index,
+    )
+  }, [hidePwResultsUi, deferredHeatmapQualityInputs, priceVerifications])
+
+  // If filters change, ensure selected legs still pass filters by snapping to the first valid option.
+  useEffect(() => {
+    if (searchGoal !== 'priceWindow' || tripType !== 'round') return
+    if (!pwOutResultFiltered) return
+
+    if (pwOutboundSel) {
+      const bucket = pwOutResultFiltered.perRouteByDate
+        .get(pwOutboundSel.routeKey)
+        ?.get(pwOutboundSel.date)
+      const opts = outboundItinerariesForCell(
+        pwOutboundSel.routeKey,
+        pwOutboundSel.date,
+        bucket,
+        pwRoundTripFiltered,
+        pwRoundTripDeepenStates,
+        (it) => passesItineraryFilters(it, filterOut),
+        pwDeepenByOutDate,
+      )
+      const cur = opts[pwOutboundSel.pickedIdx ?? 0]
+      if (!cur) {
+        if (opts.length) setPwOutboundSel({ routeKey: pwOutboundSel.routeKey, date: pwOutboundSel.date, pickedIdx: 0, selectedItinerary: opts[0] })
+      } else if (!passesItineraryFilters(cur, filterOut)) {
+        if (opts.length) setPwOutboundSel({ routeKey: pwOutboundSel.routeKey, date: pwOutboundSel.date, pickedIdx: 0, selectedItinerary: opts[0] })
+      }
+    }
+
+    if (pwRetResultFiltered && pwReturnSel && pwOutboundSel) {
+      const opts = returnItinerariesForCell(
+        pwOutboundSel.routeKey,
+        pwOutboundSel.date,
+        pwReturnSel.routeKey,
+        pwReturnSel.date,
+        pwRetResultFiltered.perRouteByDate.get(pwReturnSel.routeKey)?.get(pwReturnSel.date),
+        pwRoundTripFiltered,
+      ).filter((it) => passesItineraryFilters(it, filterRet))
+      const cur = opts[pwReturnSel.pickedIdx ?? 0]
+      if (!cur) {
+        if (opts.length) setPwReturnSel({ routeKey: pwReturnSel.routeKey, date: pwReturnSel.date, pickedIdx: 0, selectedItinerary: opts[0] })
+      } else if (!passesItineraryFilters(cur, filterRet)) {
+        if (opts.length) setPwReturnSel({ routeKey: pwReturnSel.routeKey, date: pwReturnSel.date, pickedIdx: 0, selectedItinerary: opts[0] })
+      }
+    }
+  }, [
+    searchGoal,
+    tripType,
+    filterOut,
+    filterRet,
+    pwOutResultFiltered,
+    pwRetResultFiltered,
+    pwOutboundSel,
+    pwReturnSel,
+    pwRoundTripFiltered,
+    pwRoundTripDeepenStates,
+  ])
+
   // Resolve the user's explicitly selected return cell into an itinerary + date,
   // so outbound panels can build a precise round-trip Google Flights link.
   const pwReturnSelResolved = useMemo(() => {
     if (!pwReturnSel || !pwRetResultFiltered) return null
-    // Use explicitly picked itinerary from the panel, or fall back to bucket's cheapest
     if (pwReturnSel.selectedItinerary) {
       return { it: pwReturnSel.selectedItinerary, date: pwReturnSel.date }
     }
+    const opts = pwOutboundSel
+      ? returnItinerariesForCell(
+          pwOutboundSel.routeKey,
+          pwOutboundSel.date,
+          pwReturnSel.routeKey,
+          pwReturnSel.date,
+          pwRetResultFiltered.perRouteByDate.get(pwReturnSel.routeKey)?.get(pwReturnSel.date),
+          pwRoundTripFiltered,
+        )
+      : []
+    const it = opts[pwReturnSel.pickedIdx ?? 0] ?? opts[0]
+    if (it) return { it, date: pwReturnSel.date }
     const bucket = pwRetResultFiltered.perRouteByDate.get(pwReturnSel.routeKey)?.get(pwReturnSel.date)
     return bucket ? { it: bucket.bestItinerary, date: pwReturnSel.date } : null
-  }, [pwReturnSel, pwRetResultFiltered])
+  }, [pwReturnSel, pwRetResultFiltered, pwOutboundSel, pwRoundTripFiltered])
+
+  const activeFilterSummaryLine = useMemo(() => {
+    const parts: string[] = []
+    if (outStopsMin.trim()) parts.push(`out stops ≥ ${outStopsMin}`)
+    if (outStopsMax.trim()) parts.push(`out stops ≤ ${outStopsMax}`)
+    if (retStopsMin.trim()) parts.push(`ret stops ≥ ${retStopsMin}`)
+    if (retStopsMax.trim()) parts.push(`ret stops ≤ ${retStopsMax}`)
+    if (outPrice.min.trim()) parts.push(`out price ≥ ${outPrice.min}`)
+    if (outPrice.max.trim()) parts.push(`out price ≤ ${outPrice.max}`)
+    if (retPrice.min.trim()) parts.push(`ret price ≥ ${retPrice.min}`)
+    if (retPrice.max.trim()) parts.push(`ret price ≤ ${retPrice.max}`)
+    if (outHours.minLayover.trim()) parts.push(`layover ≥ ${outHours.minLayover}h`)
+    if (outHours.maxLayover.trim()) parts.push(`layover ≤ ${outHours.maxLayover}h`)
+    if (outHours.maxTotal.trim()) parts.push(`out trip ≤ ${outHours.maxTotal}h`)
+    if (outHours.minTotal.trim()) parts.push(`out trip ≥ ${outHours.minTotal}h`)
+    if (retHours.maxTotal.trim()) parts.push(`ret trip ≤ ${retHours.maxTotal}h`)
+    if (retHours.minTotal.trim()) parts.push(`ret trip ≥ ${retHours.minTotal}h`)
+    if (outTimeRange.takeoffMin.trim() || outTimeRange.takeoffMax.trim()) {
+      parts.push(`out takeoff ${outTimeRange.takeoffMin || '…'}–${outTimeRange.takeoffMax || '…'}`)
+    }
+    if (retTimeRange.takeoffMin.trim() || retTimeRange.takeoffMax.trim()) {
+      parts.push(`ret takeoff ${retTimeRange.takeoffMin || '…'}–${retTimeRange.takeoffMax || '…'}`)
+    }
+    if (timeBucketsOut.size > 0) parts.push(`${timeBucketsOut.size} out time bucket${timeBucketsOut.size === 1 ? '' : 's'}`)
+    if (timeBucketsRet.size > 0) parts.push(`${timeBucketsRet.size} ret time bucket${timeBucketsRet.size === 1 ? '' : 's'}`)
+    if (airlineExcludedCodes.size > 0) {
+      parts.push(`${airlineExcludedCodes.size} airline${airlineExcludedCodes.size === 1 ? '' : 's'} excluded`)
+    }
+    if (aircraftSelectedCodes.length > 0) {
+      parts.push(`${aircraftSelectedCodes.length} aircraft (${aircraftMatchMode})`)
+    }
+    if (returnCustomFilters) parts.push('return filters on')
+    if (layoverGeoFilterActive) parts.push('layover geo on')
+    if (displayTimezone) parts.push(`tz ${displayTimezone}`)
+    return parts.length ? parts.join(' · ') : null
+  }, [
+    outStopsMin,
+    outStopsMax,
+    retStopsMin,
+    retStopsMax,
+    outPrice,
+    retPrice,
+    outHours.minLayover,
+    outHours.maxLayover,
+    outHours.maxTotal,
+    outHours.minTotal,
+    retHours.maxTotal,
+    retHours.minTotal,
+    outTimeRange.takeoffMin,
+    outTimeRange.takeoffMax,
+    retTimeRange.takeoffMin,
+    retTimeRange.takeoffMax,
+    timeBucketsOut,
+    timeBucketsRet,
+    airlineExcludedCodes,
+    aircraftSelectedCodes,
+    aircraftMatchMode,
+    returnCustomFilters,
+    layoverGeoFilterActive,
+    displayTimezone,
+  ])
 
   const outboundInsightStats = useMemo(() => itineraryInsightStats(displayOut), [displayOut])
+
+  const searchSummaryStats = useMemo(() => {
+    if (searchGoal !== 'priceWindow' || !hasSearched) return outboundInsightStats
+    const routeCount = pwOutResultFiltered?.routeKeyOrder?.length ?? 0
+    if (routeCount === 0 && !pwRoundTripPairMeta.length && !pwRoundTripCombos.length) {
+      return outboundInsightStats
+    }
+    const prices: number[] = []
+    for (const m of pwRoundTripPairMetaFiltered) {
+      const p = m.globalInitialMin
+      if (p != null && p > 0) prices.push(p)
+    }
+    for (const c of pwRoundTripFiltered) {
+      if (c.roundTripPrice > 0) prices.push(c.roundTripPrice)
+    }
+    prices.sort((a, b) => a - b)
+    return {
+      count: routeCount,
+      cheapest: prices[0] ?? null,
+      medianPrice: prices.length ? prices[Math.floor(prices.length / 2)] ?? null : null,
+      highest: prices.length ? prices[prices.length - 1] ?? null : null,
+      fastestMins: null,
+      medianMins: null,
+      slowestMins: null,
+    }
+  }, [
+    searchGoal,
+    hasSearched,
+    outboundInsightStats,
+    pwOutResultFiltered,
+    pwRoundTripPairMeta,
+    pwRoundTripCombos,
+    pwRoundTripPairMetaFiltered,
+    pwRoundTripFiltered,
+  ])
+
+  const pwEmptyGridHint = useMemo((): string | null => {
+    if (searchGoal !== 'priceWindow' || !hasSearched || loading) return null
+    const hasRaw =
+      pwRoundTripPairMeta.length > 0 ||
+      pwRoundTripCombos.length > 0 ||
+      pwRawOutPerDate.length > 0
+    if (!hasRaw) return null
+    const visibleRoutes = pwOutResultFiltered?.routeKeyOrder?.length ?? 0
+    if (visibleRoutes > 0) return null
+    const unfilteredRoutes = routeKeysFromPairMeta(pwRoundTripPairMetaInWindow).length
+    if (unfilteredRoutes > 0) {
+      return 'Cached routes loaded, but sidebar filters hide every route. Reset price, stops, duration, airline, or layover filters to see the heatmap.'
+    }
+    return null
+  }, [
+    searchGoal,
+    hasSearched,
+    loading,
+    pwRoundTripPairMeta,
+    pwRoundTripCombos,
+    pwRawOutPerDate,
+    pwOutResultFiltered,
+    pwRoundTripPairMetaInWindow,
+  ])
 
   const savedRoundTrips = useMemo(
     () => savedResults.filter((r) => r.leg === 'roundtrip'),
@@ -970,8 +1814,57 @@ export default function App() {
     [savedResults],
   )
 
-  const airlineItinCountsOut = useMemo(() => itineraryCountsByAirline(displayOut), [displayOut])
-  const airlineItinCountsRet = useMemo(() => itineraryCountsByAirline(displayReturn), [displayReturn])
+  const airlineItinCountsOut = useMemo(
+    () =>
+      itineraryCountsByAirline(
+        searchGoal === 'priceWindow' && tripType === 'round' ? filterPoolOut : displayOut,
+      ),
+    [searchGoal, tripType, filterPoolOut, displayOut],
+  )
+  const airlineItinCountsRet = useMemo(
+    () =>
+      itineraryCountsByAirline(
+        searchGoal === 'priceWindow' && tripType === 'round' ? filterPoolRet : displayReturn,
+      ),
+    [searchGoal, tripType, filterPoolRet, displayReturn],
+  )
+
+  /** Total vs filter-passing counts for the current price-window grid (always visible). */
+  const pwGridVisibilityStats = useMemo(() => {
+    if (searchGoal !== 'priceWindow' || tripType !== 'round' || pwRoundTripDeepenStates.length === 0) {
+      return null
+    }
+    const pool = buildRtFilterPool(pwRoundTripDeepenStates, pwRoundTripCombosInWindow)
+    const airlineOk = (it: NormalizedItinerary) => passesAirlineResultFilter(it, airlineExcludedCodes)
+    const outboundPassing = pool.outbound.filter(
+      (it) => airlineOk(it) && passesRtOutboundLegFilter(it, pwRtFilterOpts),
+    ).length
+    const airlineCombos = pwRoundTripCombosInWindow.filter(
+      (c) => airlineOk(c.outIt) && airlineOk(c.retIt),
+    )
+    const outboundPassingCombos = airlineCombos.filter((c) =>
+      passesRtOutboundLegFilter(c.outIt, pwRtFilterOpts),
+    )
+    const rawReturnItineraries = outboundPassingCombos.length
+    const filteredReturnItineraries = outboundPassingCombos.filter((c) =>
+      passesRtReturnLegFilter(c.retIt, pwRtFilterOpts),
+    ).length
+    const filteredRoundTrips = pwRoundTripFiltered.length
+    return {
+      outboundPassing,
+      rawReturnItineraries,
+      filteredReturnItineraries,
+      filteredRoundTrips,
+    }
+  }, [
+    searchGoal,
+    tripType,
+    pwRoundTripDeepenStates,
+    pwRoundTripCombosInWindow,
+    pwRoundTripFiltered,
+    airlineExcludedCodes,
+    pwRtFilterOpts,
+  ])
 
   const outPaginationKey = useMemo(() => displayOut.map(itineraryScheduleKey).join('\u001e'), [displayOut])
   const retPaginationKey = useMemo(() => displayReturn.map(itineraryScheduleKey).join('\u001e'), [displayReturn])
@@ -992,6 +1885,7 @@ export default function App() {
     }
 
     setHasSearched(true)
+    clearSerpSearchStop()
     setLoading(true)
     setAirlineExcludedCodes(new Set())
     setMapHubFilter(new Set())
@@ -1005,7 +1899,6 @@ export default function App() {
     setRetTimeRange({ ...EMPTY_TIME_RANGE })
 
     const { centerDate: outCenter, flexDays: outFlex } = dateRangeToCenterFlex(outboundDate, outboundEnd)
-    const { centerDate: retCenter, flexDays: retFlex } = dateRangeToCenterFlex(returnDate, returnEnd)
 
     const baseInput: Omit<SearchFlightInput, 'centerDate' | 'maxSegments'> = {
       origins,
@@ -1020,12 +1913,196 @@ export default function App() {
       gl: settings.gl,
       hl: settings.hl,
       currency: settings.currency,
+      adults: paxCounts.adults,
+      children: paxCounts.children,
+      cabinClass,
     }
 
     let serpDebugOutbound: SerpSearchDebugBundle | null = null
-    let serpDebugReturn: SerpSearchDebugBundle | null = null
+    let serpDebugRoundTrip: SerpSearchDebugBundle | null = null
 
     try {
+      if (tripType === 'round') {
+        const rtCacheBase = {
+          origins,
+          destinations,
+          maxSegments: API_MAX_SEGMENTS,
+          mockMode: settings.mockMode,
+          paxDesc,
+        }
+        const { pairs } = buildFilteredRoundTripDatePairs(
+          outboundDate,
+          outboundEnd,
+          returnDate,
+          returnEnd,
+          null,
+        )
+        if (!pairs.length) {
+          setError('No valid round-trip date pairs in the selected windows.')
+          return
+        }
+
+        let combos: RoundTripCombo[] = []
+
+        if (searchSource === 'db') {
+          if (settings.mockMode) {
+            setRawOut([])
+            setRawReturn([])
+            setError('Mock mode has no SQLite cache. Use Search API or disable mock mode in Settings.')
+            return
+          }
+          for (const { outDate, retDate } of pairs) {
+            const cached = await loadRtPairCacheEntry(
+              { ...rtCacheBase, outDate, retDate },
+              { allowStale: true },
+            )
+            if (cached) {
+              combos.push(...cached.payload.combos)
+              continue
+            }
+            const rows =
+              (await loadCachedSplitFallback(
+                withPax({
+                  direction: 'roundTrip',
+                  origins,
+                  destinations,
+                  centerDate: outDate,
+                  returnDate: retDate,
+                  flexDays: 0,
+                  maxSegments: API_MAX_SEGMENTS,
+                  mockMode: settings.mockMode,
+                }),
+              )) ?? []
+            combos.push(...roundTripCombosFromItineraries(rows))
+          }
+          if (!combos.length) {
+            setRawOut([])
+            setRawReturn([])
+            setError(
+              'No cached round-trip data for these date pairs. Run Search API once (Routing discovery or Price window) with the same route, dates, and passengers.',
+            )
+            return
+          }
+          setCacheHint(
+            `Round-trip cache: ${combos.length} combo${combos.length === 1 ? '' : 's'} across ${pairs.length} date pair${pairs.length === 1 ? '' : 's'}.`,
+          )
+        } else {
+          const rtRes = await searchPriceWindowRoundTrip(
+            {
+              origins,
+              destinations,
+              startDate: outboundDate,
+              endDate: outboundEnd,
+              returnStartDate: returnDate,
+              returnEndDate: returnEnd,
+              maxSegments: API_MAX_SEGMENTS,
+              mockMode: settings.mockMode,
+              apiKey: settings.apiKey,
+              maxTotalHours: emptyToNull(outHours.maxTotal),
+              showHidden: settings.showHidden,
+              deepSearch: settings.deepSearch,
+              gl: settings.gl,
+              hl: settings.hl,
+              currency: settings.currency,
+              adults: paxCounts.adults,
+              children: paxCounts.children,
+              cabinClass,
+              roundTripSortMode: 'both',
+              searchMode: 'fast',
+            },
+            {
+              destinations,
+              excludedAirports: PIPELINE_EXCLUDED_NONE,
+            },
+            (state) => setSearchProgress(state),
+          )
+          combos = rtRes.combos
+          serpDebugRoundTrip = rtRes.serpDebug
+          setSerpCapture({ outbound: null, return: null })
+          if (!settings.mockMode && rtRes.pairDeepenStates.length > 0) {
+            await persistRoundTripPairs(rtCacheBase, rtRes.pairDeepenStates, rtRes.pairMeta, tzByIata)
+          }
+          if (rtRes.pausedEarly) {
+            setCacheHint(
+              `Round-trip search paused (${rtRes.pairsCompleted ?? '?'}/${rtRes.pairsTotal ?? '?'} pairs). ${rtRes.pauseReason ?? ''}`,
+            )
+          } else {
+            setCacheHint(
+              `Round-trip scan: ${rtRes.pairMeta.length} date pair${rtRes.pairMeta.length === 1 ? '' : 's'} (SerpApi type 1, bundled fares).`,
+            )
+          }
+        }
+
+        const lists = discoveryListsFromCombos(combos)
+        setRawOut(lists.outbound)
+        setRawReturn(lists.return)
+
+        const outCount = lists.outbound.length
+        const retCount = lists.return.length
+        if (outCount > 0 || retCount > 0) {
+          void recordSearchHistory(
+            {
+              v: 1,
+              origins: [...origins],
+              destinations: [...destinations],
+              tripType: 'round',
+              searchGoal: 'discovery',
+              outboundDate,
+              outboundEnd,
+              returnDate,
+              returnEnd,
+              adultCount: paxCounts.adults,
+              childrenCount: paxCounts.children,
+              searchSource,
+              mockMode: settings.mockMode,
+              deepSearch: settings.deepSearch,
+              showHidden: settings.showHidden,
+              gl: settings.gl,
+              hl: settings.hl,
+              currency: settings.currency,
+            },
+            outCount,
+            retCount,
+          )
+        }
+
+        if (searchSource === 'api' && serpDebugRoundTrip) {
+          const { data } = buildSerpCapturePersistPayload({
+            summary: {
+              searchGoal: 'discovery',
+              origins,
+              destinations,
+              outboundDate,
+              outboundEnd,
+              returnDate,
+              returnEnd,
+            },
+            outbound: null,
+            return: null,
+            roundTrip: serpDebugRoundTrip,
+          })
+          void saveSerpApiSearchCapture(
+            {
+              mockMode: settings.mockMode,
+              origins,
+              destinations,
+              outboundDate,
+              outboundEnd,
+              returnDate,
+              returnEnd,
+              deepSearch: settings.deepSearch,
+              showHidden: settings.showHidden,
+              gl: settings.gl,
+              hl: settings.hl,
+              currency: settings.currency,
+              searchGoal: 'discovery',
+            },
+            data,
+          )
+        }
+        return
+      }
+
       const outParts = {
         direction: 'outbound' as const,
         origins,
@@ -1045,13 +2122,13 @@ export default function App() {
           setError('Mock mode has no SQLite cache. Use Search API or disable mock mode in Settings.')
           return
         }
-        out = await loadCachedSplitFallback(outParts)
+        out = await loadCachedSplitFallback(withPax(outParts))
         if (!out?.length) {
           // Fallback: try per-date cache rows (written by Price Window searches)
           const window = dateWindow(outParts.centerDate, outParts.flexDays)
           const perDateFallback: NormalizedItinerary[][] = []
           for (const date of window) {
-            const cached = await loadCachedSplitFallback({ ...outParts, centerDate: date, flexDays: 0 })
+            const cached = await loadCachedSplitFallback(withPax({ ...outParts, centerDate: date, flexDays: 0 }))
             if (cached?.length) perDateFallback.push(cached)
           }
           if (perDateFallback.length > 0) {
@@ -1063,7 +2140,7 @@ export default function App() {
           setRawOut([])
           setRawReturn([])
           setError(
-            'No cached snapshot for this search. Run Search API once with the same origins, destinations, dates, flex ± days, max segments, and Settings (gl / hl / currency / deep search / show hidden).',
+            'No cached snapshot for this search. Run Search API once with the same origins, destinations, dates, flex ± days, passengers, max segments, and Settings (gl / hl / currency / deep search / show hidden).',
           )
           return
         }
@@ -1072,106 +2149,30 @@ export default function App() {
           { ...baseInput, centerDate: outCenter, maxSegments: API_MAX_SEGMENTS },
           'outbound',
           {
-            primaryDestination,
-            multipleDestinations,
-            roundTrip: tripType === 'round',
+            destinations,
+            roundTrip: false,
             excludedAirports: PIPELINE_EXCLUDED_NONE,
             sort: sortOut,
           },
-          (current, total) => setSearchProgress({ phase: 'outbound', current, total }),
+          (state) => setSearchProgress(state),
         )
         out = outRes.itineraries
         serpDebugOutbound = outRes.serpDebug
         setSerpCapture({ outbound: outRes.serpDebug, return: null })
         if (!settings.mockMode) {
           // Persist merged discovery row (discovery DB-load key)
-          void persistSearch(outParts, outRes.itineraries, tzByIata)
+          void persistSearch(withPax(outParts), outRes.itineraries, tzByIata)
           // Also persist per-date rows so Price Window DB-load can read them
           for (const { date, itineraries } of outRes.perDate) {
-            void persistSearch({ ...outParts, centerDate: date, flexDays: 0 }, itineraries, tzByIata)
+            void persistSearch(withPax({ ...outParts, centerDate: date, flexDays: 0 }), itineraries, tzByIata)
           }
         }
       }
       setRawOut(out)
-
-      let returnList: NormalizedItinerary[] = []
-
-      if (tripType !== 'round') {
-        setRawReturn([])
-      } else {
-        const retParts = {
-          direction: 'return' as const,
-          origins: destinations,
-          destinations: origins,
-          centerDate: retCenter,
-          flexDays: retFlex,
-          maxSegments: API_MAX_SEGMENTS,
-          mockMode: settings.mockMode,
-        }
-        let ret: NormalizedItinerary[] | null = null
-        if (searchSource === 'db') {
-          ret = await loadCachedSplitFallback(retParts)
-          if (!ret?.length) {
-            // Fallback: try per-date cache rows (written by Price Window searches)
-            const window = dateWindow(retParts.centerDate, retParts.flexDays)
-            const perDateFallback: NormalizedItinerary[][] = []
-            for (const date of window) {
-              const cached = await loadCachedSplitFallback({ ...retParts, centerDate: date, flexDays: 0 })
-              if (cached?.length) perDateFallback.push(cached)
-            }
-            if (perDateFallback.length > 0) {
-              ret = mergePerDateUnique(perDateFallback, MERGE_PER_DATE_LIMIT, sortReturn)
-              setCacheHint((prev) =>
-                prev ? `${prev} Return loaded from price window per-date cache.` : 'Return loaded from price window per-date cache.',
-              )
-            }
-          }
-          if (!ret?.length) {
-            setError(
-              'No cached return snapshot for this search. Run Search API once for the same return route and dates.',
-            )
-            setRawReturn([])
-            return
-          }
-        } else {
-          const retRes = await searchDirection(
-            {
-              ...baseInput,
-              origins: destinations,
-              destinations: origins,
-              centerDate: retCenter,
-              flexDays: retFlex,
-              maxSegments: API_MAX_SEGMENTS,
-              maxTotalHours: emptyToNull(effRetHours.maxTotal),
-            },
-            'return',
-            {
-              primaryDestination,
-              multipleDestinations,
-              roundTrip: true,
-              excludedAirports: PIPELINE_EXCLUDED_NONE,
-              sort: sortReturn,
-            },
-            (current, total) => setSearchProgress({ phase: 'return', current, total }),
-          )
-          ret = retRes.itineraries
-          serpDebugReturn = retRes.serpDebug
-          setSerpCapture((prev) => ({ ...prev, return: retRes.serpDebug }))
-          if (!settings.mockMode) {
-            // Persist merged discovery row (discovery DB-load key)
-            void persistSearch(retParts, retRes.itineraries, tzByIata)
-            // Also persist per-date rows so Price Window DB-load can read them
-            for (const { date, itineraries } of retRes.perDate) {
-              void persistSearch({ ...retParts, centerDate: date, flexDays: 0 }, itineraries, tzByIata)
-            }
-          }
-        }
-        returnList = ret ?? []
-        setRawReturn(returnList)
-      }
+      setRawReturn([])
 
       const outCount = out?.length ?? 0
-      const retCount = returnList.length
+      const retCount = 0
       if (outCount > 0 || retCount > 0) {
         const snapshot: SearchHistorySnapshotV1 = {
           v: 1,
@@ -1183,6 +2184,8 @@ export default function App() {
           outboundEnd,
           returnDate,
           returnEnd,
+          adultCount: paxCounts.adults,
+          childrenCount: paxCounts.children,
           searchSource,
           mockMode: settings.mockMode,
           deepSearch: settings.deepSearch,
@@ -1195,7 +2198,19 @@ export default function App() {
       }
 
       if (searchSource === 'api' && serpDebugOutbound) {
-        const payload = buildSerpDownloadPayload({ outbound: serpDebugOutbound, return: serpDebugReturn })
+        const { data } = buildSerpCapturePersistPayload({
+          summary: {
+            searchGoal: 'discovery',
+            origins,
+            destinations,
+            outboundDate,
+            outboundEnd,
+            returnDate: null,
+            returnEnd: null,
+          },
+          outbound: serpDebugOutbound,
+          return: null,
+        })
         void saveSerpApiSearchCapture(
           {
             mockMode: settings.mockMode,
@@ -1203,19 +2218,21 @@ export default function App() {
             destinations,
             outboundDate,
             outboundEnd,
-            returnDate: tripType === 'round' ? returnDate : null,
-            returnEnd: tripType === 'round' ? returnEnd : null,
+            returnDate: null,
+            returnEnd: null,
             deepSearch: settings.deepSearch,
             showHidden: settings.showHidden,
             gl: settings.gl,
             hl: settings.hl,
             currency: settings.currency,
+            searchGoal: 'discovery',
           },
-          payload,
+          data,
         )
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Search failed')
+      const msg = e instanceof Error ? e.message : 'Search failed'
+      setError(msg.includes('\n') ? msg : formatSerpThrottleHelp(msg))
     } finally {
       setLoading(false)
       setSearchProgress(null)
@@ -1230,22 +2247,50 @@ export default function App() {
     outboundEnd,
     returnDate,
     returnEnd,
-    primaryDestination,
-    multipleDestinations,
     sortOut,
     sortReturn,
     searchSource,
     loadCached,
     loadCachedSplitFallback,
     persistSearch,
+    persistRoundTripPairs,
+    loadRtPairCacheEntry,
     saveSerpApiSearchCapture,
     tzByIata,
     outHours,
-    effRetHours,
+    paxDesc,
     recordSearchHistory,
   ])
 
-  const runPriceWindowSearch = useCallback(async () => {
+  const runPriceWindowSearch = useCallback(async (runOpts?: {
+    sortMode?: RoundTripSortMode
+    alsoSearchOneWay?: boolean
+    searchMode?: PriceWindowSearchMode
+    pairFilters?: PriceWindowPairFilters
+    replaceOutbound?: boolean
+  }) => {
+    const activeSortMode = runOpts?.sortMode ?? pwRtSortMode
+    const activeAlsoOneWay = runOpts?.alsoSearchOneWay === true
+    const activeSearchMode = runOpts?.searchMode ?? pwSearchMode
+    const activePairFilters = runOpts?.pairFilters ?? pwPairFilters
+    const replaceOutbound = runOpts?.replaceOutbound === true
+
+    const bounds: PriceWindowDateBounds | null =
+      tripType === 'round'
+        ? {
+            outboundStart: outboundDate,
+            outboundEnd: outboundEnd,
+            returnStart: returnDate,
+            returnEnd: returnEnd,
+          }
+        : null
+    const existingInWindow = pwDeepenStatesRef.current.filter((s) =>
+      bounds ? isDatePairInBounds(s.outDate, s.retDate, bounds) : true,
+    )
+    const hasExistingGrid = existingInWindow.length > 0
+    const pwTranche = resolvePwSearchTranche(replaceOutbound, hasExistingGrid)
+    const useTranche = tripType === 'round' && searchSource === 'api'
+
     setError(null)
     setCacheHint(null)
     setSearchProgress(null)
@@ -1272,16 +2317,38 @@ export default function App() {
     }
 
     setHasSearched(true)
+    clearSerpSearchStop()
     setLoading(true)
+    setPwActivityMessage(null)
+    // Seed only for continue-tranche (grid already has combos). Refresh / airline scans
+    // start empty so each re-fetched return shows in the activity ticker.
+    if (useTranche && pwTranche === 'continue') {
+      const snap = snapshotCombos(pwRoundTripCombos)
+      seenComboKeysRef.current = new Set(snap.keys())
+      refreshBeforeSnapRef.current = snap
+    } else {
+      seenComboKeysRef.current = new Set()
+      refreshBeforeSnapRef.current = new Map()
+    }
+    await new Promise<void>((r) => setTimeout(r, 0))
     setSerpCapture({ outbound: null, return: null })
-    setPwOutResult(null)
-    setPwRetResult(null)
     setPwOutboundSel(null)
     setPwReturnSel(null)
-    setPwRawOutPerDate([])
-    setPwRawRetPerDate([])
-    setRawOut([])
-    setRawReturn([])
+
+    const clearPwGrid =
+      searchSource === 'api' && (replaceOutbound || pwTranche === 'initial')
+    if (clearPwGrid) {
+      setPwRawOutPerDate([])
+      setPwRawRetPerDate([])
+      setPwRoundTripCombos([])
+      setPwRoundTripPairMeta([])
+      setPwRoundTripDeepenStates([])
+      pwDeepenStatesRef.current = []
+    }
+    if (clearPwGrid) {
+      setRawOut([])
+      setRawReturn([])
+    }
 
     /** Build HashParts for a single price-window date (flexDays=0). */
     function pwHashParts(dir: 'outbound' | 'return', origs: string[], dests: string[], date: string) {
@@ -1293,43 +2360,239 @@ export default function App() {
         flexDays: 0,
         maxSegments: API_MAX_SEGMENTS,
         mockMode: settings.mockMode,
+        paxDesc,
       } as const
     }
 
+    function pwRtHashParts(origs: string[], dests: string[], outDate: string, retDate: string) {
+      return {
+        direction: 'roundTrip' as const,
+        origins: origs,
+        destinations: dests,
+        centerDate: outDate,
+        returnDate: retDate,
+        flexDays: 0,
+        maxSegments: API_MAX_SEGMENTS,
+        mockMode: settings.mockMode,
+        paxDesc,
+      }
+    }
+
+    const serpCtx = {
+      destinations,
+      roundTrip: tripType === 'round',
+      excludedAirports: PIPELINE_EXCLUDED_NONE,
+    }
+
     try {
+      if (searchSource === 'api' && !settings.mockMode) {
+        const hourUsed =
+          serpUsageState.status === 'ok' ? (serpUsageState.data.this_hour_searches ?? 0) : 0
+        const accountHourLimit =
+          serpUsageState.status === 'ok'
+            ? serpUsageState.data.account_rate_limit_per_hour
+            : undefined
+        const hourLimit = effectivePwHourLimit(accountHourLimit, settings.pwHourlySerpCalls)
+        const budget = createSerpHourBudget({
+          hourLimit,
+          baselineUsed: hourUsed,
+          onChange: (snap) => {
+            setSearchProgress((prev) =>
+              prev
+                ? {
+                    ...prev,
+                    hourUsed: snap.usedThisHour,
+                    hourLimit: snap.hourLimit,
+                    sessionCalls: snap.sessionCalls,
+                    clickReserve: snap.clickReserve,
+                    clickReserveRemaining: snap.clickReserveRemaining,
+                    remainingForAutoDeepen: snap.remainingForAutoDeepen,
+                  }
+                : {
+                    phase: 'roundTrip',
+                    current: 0,
+                    total: 1,
+                    hourUsed: snap.usedThisHour,
+                    hourLimit: snap.hourLimit,
+                    sessionCalls: snap.sessionCalls,
+                    clickReserve: snap.clickReserve,
+                    clickReserveRemaining: snap.clickReserveRemaining,
+                    remainingForAutoDeepen: snap.remainingForAutoDeepen,
+                  },
+            )
+          },
+        })
+        if (tripType === 'round' && !useTranche && activeSearchMode === 'balanced') {
+          budget.setClickReserve(PW_BALANCED_CLICK_RESERVE)
+        }
+        setActiveSerpHourBudget(budget)
+      }
+
       // ── Database mode: load each date from SQLite cache ──────────────────
       if (searchSource === 'db') {
-        const outDates = pwDateRange(outboundDate, outboundEnd)
-        const outPerDate: PriceWindowPerDateEntry[] = []
-        for (const date of outDates) {
-          const itineraries = await loadCachedSplitFallback(pwHashParts('outbound', origins, destinations, date)) ?? []
-          outPerDate.push({ date, itineraries })
-        }
-        if (!outPerDate.some((d) => d.itineraries.length > 0)) {
-          setError('No cached price window data for outbound. Run Search API once with the same route and date window.')
-          return
-        }
-        setPwRawOutPerDate(outPerDate)
-        setPwOutResult(buildPriceWindowResult(outPerDate))
-        setRawOut(outPerDate.flatMap((d) => d.itineraries))
-
+        setCacheHint('Loading round-trip cache from browser database…')
         if (tripType === 'round') {
-          const retDates = pwDateRange(returnDate, returnEnd)
-          const retPerDate: PriceWindowPerDateEntry[] = []
-          for (const date of retDates) {
-            const itineraries = await loadCachedSplitFallback(pwHashParts('return', destinations, origins, date)) ?? []
-            retPerDate.push({ date, itineraries })
-          }
-          if (!retPerDate.some((d) => d.itineraries.length > 0)) {
-            setError('No cached price window data for return leg.')
+          const { pairs } = buildFilteredRoundTripDatePairs(
+            outboundDate,
+            outboundEnd,
+            returnDate,
+            returnEnd,
+            activePairFilters,
+          )
+          if (!pairs.length) {
+            setError(
+              'No date pairs match your filters. Widen trip length, increase sparse stride, or raise the pair cap.',
+            )
             return
           }
-          setPwRawRetPerDate(retPerDate)
-          setPwRetResult(buildPriceWindowResult(retPerDate))
-          setRawReturn(retPerDate.flatMap((d) => d.itineraries))
-        }
+          setSearchProgress({
+            phase: 'roundTrip',
+            current: 0,
+            total: pairs.length,
+            datePair: 'Reading rt_pair_cache…',
+          })
+          const combos: RoundTripCombo[] = []
+          const pairMeta: RoundTripPairMeta[] = []
+          const deepenStates: RoundTripPairDeepenState[] = []
+          let pairsFromRtCache = 0
+          let pairsFromSplitFallback = 0
+          const rtCacheBase = {
+            origins,
+            destinations,
+            maxSegments: API_MAX_SEGMENTS,
+            mockMode: settings.mockMode,
+            paxDesc,
+          }
+          const batchHits = await loadRtPairCacheBatchEntries(rtCacheBase, pairs, { allowStale: true })
+          setSearchProgress({
+            phase: 'roundTrip',
+            current: pairs.length,
+            total: pairs.length,
+            datePair: `Loaded ${batchHits.length} cached date pair${batchHits.length === 1 ? '' : 's'}`,
+          })
+          const batchByCell = new Map(batchHits.map((h) => [`${h.outDate}|${h.retDate}`, h]))
+          for (let pi = 0; pi < pairs.length; pi++) {
+            const { outDate, retDate } = pairs[pi]!
+            const cached = batchByCell.get(`${outDate}|${retDate}`)
+            if (cached) {
+              pairsFromRtCache++
+              pairMeta.push(cached.payload.pairMeta)
+              deepenStates.push(storedToDeepenState(cached.payload))
+              if (cached.payload.combos.length) {
+                combos.push(...cached.payload.combos)
+              }
+              continue
+            }
+            const rows =
+              (await loadCachedSplitFallback(pwRtHashParts(origins, destinations, outDate, retDate))) ?? []
+            if (rows.length) {
+              pairsFromSplitFallback++
+              combos.push(...roundTripCombosFromItineraries(rows))
+            }
+            if (pi > 0 && pi % 25 === 0) {
+              await new Promise<void>((r) => setTimeout(r, 0))
+            }
+          }
+          if (!combos.length && !pairMeta.length) {
+            const cacheStats = await rtPairCacheRouteStatsFor({
+              origins,
+              destinations,
+              maxSegments: API_MAX_SEGMENTS,
+              mockMode: settings.mockMode,
+              paxDesc,
+            })
+            const staleHint =
+              cacheStats.routeStale > 0 && cacheStats.routeFresh === 0
+                ? ` Found ${cacheStats.routeStale} cached row${cacheStats.routeStale === 1 ? '' : 's'} for this route but past cache TTL — raise Cache TTL in Settings or run API to refresh.`
+                : ''
+            const otherHint =
+              cacheStats.totalFresh > 0 && cacheStats.routeFresh === 0 && cacheStats.routeStale === 0
+                ? ` Cache has ${cacheStats.totalFresh} fresh row${cacheStats.totalFresh === 1 ? '' : 's'} for other routes.`
+                : cacheStats.routeTotal === 0
+                  ? ' No round-trip cache rows found in this browser yet.'
+                  : cacheStats.routeTotal > 0
+                    ? ` Found ${cacheStats.routeTotal} row${cacheStats.routeTotal === 1 ? '' : 's'} for this route but none matched the requested date pairs.`
+                    : ''
+            setError(
+              `No cached round-trip data for ${pairs.length} date pair${pairs.length === 1 ? '' : 's'} ` +
+                `(${origins.join('+')} → ${destinations.join('+')}, pax ${paxDesc}).` +
+                otherHint +
+                staleHint +
+                ' Run Search with Source = API (same route, dates, passengers); results are saved after each scan.',
+            )
+            return
+          }
+          startTransition(() => {
+            setPwRoundTripCombos(combos)
+            if (pairMeta.length > 0) {
+              setPwRoundTripPairMeta(pairMeta)
+              setPwRoundTripDeepenStates(deepenStates)
+              pwDeepenStatesRef.current = deepenStates
+            } else {
+              setPwRoundTripPairMeta([])
+              setPwRoundTripDeepenStates([])
+              pwDeepenStatesRef.current = []
+            }
+          })
+          const filteredMeta = filterPairMetaListForDisplay(pairMeta, deepenStates, pwRtFilterOpts)
+          const routesAfterFilters = new Set(
+            filteredMeta.flatMap((m) => Object.keys(m.initialMinByRoute)),
+          )
+          const metaLine =
+            pairMeta.length > 0 && !combos.length
+              ? `${pairMeta.length} date pair${pairMeta.length === 1 ? '' : 's'} (initial scan — deepen cells for itineraries)`
+              : `${combos.length} combo${combos.length === 1 ? '' : 's'} across ${pairs.length} date pair${pairs.length === 1 ? '' : 's'}`
+          const srcBits = [
+            pairsFromRtCache ? `${pairsFromRtCache} rt-pair cache` : '',
+            pairsFromSplitFallback ? `${pairsFromSplitFallback} split fallback` : '',
+          ].filter(Boolean)
+          setCacheHint(
+            `Round-trip cache: ${metaLine}${srcBits.length ? ` · ${srcBits.join(', ')}` : ''}.` +
+              (pairMeta.length > 0 && routesAfterFilters.size === 0
+                ? ' Sidebar filters hide every route — reset price/stops/time filters to see the grid.'
+                : ''),
+          )
+          if (pairMeta.length > 0 && routesAfterFilters.size === 0) {
+            setError(
+              'Cached round-trip data loaded, but sidebar filters hide every route. Reset filters or choose a different config preset.',
+            )
+          }
 
-        setCacheHint('Price window loaded from cache.')
+          if (activeAlsoOneWay) {
+            const outDates = pwDateRange(outboundDate, outboundEnd)
+            const outPerDate: PriceWindowPerDateEntry[] = []
+            for (const date of outDates) {
+              const itineraries =
+                (await loadCachedSplitFallback(pwHashParts('outbound', origins, destinations, date))) ?? []
+              outPerDate.push({ date, itineraries })
+            }
+            setPwRawOutPerDate(outPerDate)
+            const retDates = pwDateRange(returnDate, returnEnd)
+            const retPerDate: PriceWindowPerDateEntry[] = []
+            for (const date of retDates) {
+              const itineraries =
+                (await loadCachedSplitFallback(pwHashParts('return', destinations, origins, date))) ?? []
+              retPerDate.push({ date, itineraries })
+            }
+            setPwRawRetPerDate(retPerDate)
+            setCacheHint((h) => `${h ?? ''} One-way leg cache loaded for comparison.`)
+          }
+        } else {
+          const outDates = pwDateRange(outboundDate, outboundEnd)
+          const outPerDate: PriceWindowPerDateEntry[] = []
+          for (const date of outDates) {
+            const itineraries =
+              (await loadCachedSplitFallback(pwHashParts('outbound', origins, destinations, date))) ?? []
+            outPerDate.push({ date, itineraries })
+          }
+          if (!outPerDate.some((d) => d.itineraries.length > 0)) {
+            setError('No cached price window data for outbound. Run Search API once with the same route and date window.')
+            return
+          }
+          setPwRawOutPerDate(outPerDate)
+          setRawOut(outPerDate.flatMap((d) => d.itineraries))
+          setCacheHint('Price window loaded from cache.')
+        }
         return
       }
 
@@ -1348,72 +2611,179 @@ export default function App() {
         gl: settings.gl,
         hl: settings.hl,
         currency: settings.currency,
+        adults: paxCounts.adults,
+        children: paxCounts.children,
+        cabinClass,
+        expandWithinPctOfGlobalMin: settings.rtExpandWithinPctEnabled
+          ? settings.rtExpandWithinPct
+          : null,
       }
 
-      const outRes = await searchPriceWindow(
-        baseInput,
-        'outbound',
-        {
-          primaryDestination,
-          multipleDestinations,
-          roundTrip: tripType === 'round',
-          excludedAirports: PIPELINE_EXCLUDED_NONE,
-        },
-        (current, total) => setSearchProgress({ phase: 'outbound', current, total }),
-      )
-      setPwRawOutPerDate(outRes.perDate)
-      setPwOutResult(buildPriceWindowResult(outRes.perDate))
-      setRawOut(outRes.perDate.flatMap((d) => d.itineraries))
-      setSerpCapture({ outbound: outRes.serpDebug, return: null })
-
-      if (!settings.mockMode) {
-        for (const { date, itineraries } of outRes.perDate) {
-          void persistSearch(pwHashParts('outbound', origins, destinations, date), itineraries, tzByIata)
-        }
-      }
-
+      let pwOutCount = 0
       let pwRetCount = 0
-      if (tripType === 'round') {
-        const retInput: PriceWindowSearchInput = {
-          origins: destinations,
-          destinations: origins,
-          startDate: returnDate,
-          endDate: returnEnd,
-          maxSegments: API_MAX_SEGMENTS,
-          mockMode: settings.mockMode,
-          apiKey: settings.apiKey,
-          maxTotalHours: emptyToNull(effRetHours.maxTotal),
-          showHidden: settings.showHidden,
-          deepSearch: settings.deepSearch,
-          gl: settings.gl,
-          hl: settings.hl,
-          currency: settings.currency,
-        }
-        const retRes = await searchPriceWindow(
-          retInput,
-          'return',
-          {
-            primaryDestination,
-            multipleDestinations,
-            roundTrip: true,
-            excludedAirports: PIPELINE_EXCLUDED_NONE,
-          },
-          (current, total) => setSearchProgress({ phase: 'return', current, total }),
-        )
-        setPwRawRetPerDate(retRes.perDate)
-        setPwRetResult(buildPriceWindowResult(retRes.perDate))
-        setRawReturn(retRes.perDate.flatMap((d) => d.itineraries))
-        setSerpCapture((prev) => ({ ...prev, return: retRes.serpDebug }))
-        pwRetCount = retRes.perDate.reduce((s, d) => s + d.itineraries.length, 0)
+      let rtPaused = false
+      let serpDebugPwOutbound: SerpSearchDebugBundle | null = null
+      let serpDebugPwReturn: SerpSearchDebugBundle | null = null
 
-        if (!settings.mockMode) {
-          for (const { date, itineraries } of retRes.perDate) {
-            void persistSearch(pwHashParts('return', destinations, origins, date), itineraries, tzByIata)
+      if (tripType === 'round') {
+        const rtRes = await searchPriceWindowRoundTrip(
+          {
+            ...baseInput,
+            returnStartDate: returnDate,
+            returnEndDate: returnEnd,
+            maxTotalHours: emptyToNull(outHours.maxTotal),
+            roundTripSortMode: activeSortMode,
+            searchMode: useTranche ? 'tranche' : activeSearchMode,
+            pairFilters: activePairFilters,
+            pwTranche: useTranche ? pwTranche : undefined,
+            plannedHourlySerpCalls: useTranche ? settings.pwHourlySerpCalls : undefined,
+            existingPairDeepenStates:
+              useTranche && pwTranche === 'continue' ? existingInWindow : undefined,
+            rtLegFilterOpts: pwRtFilterOpts,
+          },
+          serpCtx,
+          (state) => setSearchProgress(state),
+          (snap) => {
+            pwPartialSnapRef.current = snap
+            pwDeepenStatesRef.current = snap.pairDeepenStates
+            // Activity ticker: immediately find and display the latest new combo
+            const activity = drainActivityEvents(
+              snap.pairDeepenStates,
+              seenComboKeysRef.current,
+              refreshBeforeSnapRef.current,
+              settings.currency,
+            )
+            if (activity) setPwActivityMessage(activity)
+            if (pwPartialUiTimerRef.current) return
+            pwPartialUiTimerRef.current = setTimeout(() => {
+              pwPartialUiTimerRef.current = null
+              const latest = pwPartialSnapRef.current
+              if (!latest) return
+              setPwRoundTripPairMeta(latest.pairMeta)
+              setPwRoundTripCombos(latest.combos)
+            }, 2000)
+          },
+        )
+        const filterLine =
+          rtRes.pairFilterStats != null
+            ? formatPairFilterStatsLine(rtRes.pairFilterStats, activePairFilters)
+            : null
+        setPwRoundTripCombos(rtRes.combos)
+        setPwRoundTripPairMeta(rtRes.pairMeta)
+        setPwRoundTripDeepenStates(rtRes.pairDeepenStates)
+        serpDebugPwOutbound = rtRes.serpDebug
+        setSerpCapture({ outbound: rtRes.serpDebug, return: null })
+        pwOutCount = rtRes.pairMeta.length || rtRes.combos.length
+        pwRetCount = pwOutCount
+
+        let rtStatusLine = formatPriceWindowRoundTripStatus({
+          mode: useTranche ? 'tranche' : activeSearchMode,
+          pairMeta: rtRes.pairMeta,
+          pairsTotal: rtRes.pairsTotal,
+          pairsCompleted: rtRes.pairsCompleted,
+          combosCount: rtRes.combos.length,
+          autoDeepenedCells: rtRes.autoDeepenedCells,
+          pausedEarly: rtRes.pausedEarly,
+          pauseReason: rtRes.pauseReason,
+          routesRemaining: rtRes.routesRemaining,
+          filterLine,
+        })
+        if (rtRes.pausedEarly) {
+          rtPaused = true
+        } else if (!useTranche && activeSearchMode === 'balanced') {
+          rtStatusLine += ` (${PW_BALANCED_CLICK_RESERVE} Serp calls reserved for cell clicks.)`
+        }
+        setCacheHint(rtStatusLine)
+
+        if (useTranche && searchSource === 'api' && !settings.mockMode) {
+          recordPwLastSearchAt()
+          setPwLastSearchAgo(formatTimeSinceSearch(loadPwLastSearchAt()))
+        }
+
+        if (!settings.mockMode && rtRes.pairDeepenStates.length > 0) {
+          if (pwPartialUiTimerRef.current) {
+            clearTimeout(pwPartialUiTimerRef.current)
+            pwPartialUiTimerRef.current = null
+          }
+          setCacheHint((h) => `${h ?? ''} · Saving cache…`)
+          await new Promise<void>((r) => setTimeout(r, 0))
+          await persistRoundTripPairs(
+            {
+              origins,
+              destinations,
+              maxSegments: API_MAX_SEGMENTS,
+              mockMode: settings.mockMode,
+              paxDesc,
+            },
+            rtRes.pairDeepenStates,
+            rtRes.pairMeta,
+            tzByIata,
+            { flushToDisk: true },
+          )
+        }
+
+        if (activeAlsoOneWay && !rtPaused) {
+          const outRes = await searchPriceWindow(
+            baseInput,
+            'outbound',
+            serpCtx,
+            (state) => setSearchProgress(state),
+          )
+          setPwRawOutPerDate(outRes.perDate)
+          if (!settings.mockMode) {
+            for (const { date, itineraries } of outRes.perDate) {
+              void persistSearch(pwHashParts('outbound', origins, destinations, date), itineraries, tzByIata)
+            }
+          }
+          const retInput: PriceWindowSearchInput = {
+            ...baseInput,
+            origins: destinations,
+            destinations: origins,
+            startDate: returnDate,
+            endDate: returnEnd,
+            maxTotalHours: emptyToNull(effRetHours.maxTotal),
+          }
+          const retRes = await searchPriceWindow(
+            retInput,
+            'return',
+            serpCtx,
+            (state) => setSearchProgress(state),
+          )
+          setPwRawRetPerDate(retRes.perDate)
+          serpDebugPwReturn = retRes.serpDebug
+          setSerpCapture((prev) => ({
+            outbound: prev.outbound,
+            return: retRes.serpDebug,
+          }))
+          if (!settings.mockMode) {
+            for (const { date, itineraries } of retRes.perDate) {
+              void persistSearch(pwHashParts('return', destinations, origins, date), itineraries, tzByIata)
+            }
           }
         }
+      } else {
+        const outRes = await searchPriceWindow(
+          baseInput,
+          'outbound',
+          serpCtx,
+          (state) => setSearchProgress(state),
+        )
+        setPwRawOutPerDate(outRes.perDate)
+        setRawOut(outRes.perDate.flatMap((d) => d.itineraries))
+        serpDebugPwOutbound = outRes.serpDebug
+        setSerpCapture({ outbound: outRes.serpDebug, return: null })
+        pwOutCount = outRes.perDate.reduce((s, d) => s + d.itineraries.length, 0)
+
+        if (!settings.mockMode) {
+          for (const { date, itineraries } of outRes.perDate) {
+            void persistSearch(pwHashParts('outbound', origins, destinations, date), itineraries, tzByIata)
+          }
+        }
+        setCacheHint(
+          `One-way price window complete · ${outRes.perDate.length} outbound date${outRes.perDate.length === 1 ? '' : 's'} · ${pwOutCount} itineraries.`,
+        )
       }
 
-      const pwOutCount = outRes.perDate.reduce((s, d) => s + d.itineraries.length, 0)
       if (pwOutCount > 0 || pwRetCount > 0) {
         const snapshot: SearchHistorySnapshotV1 = {
           v: 1,
@@ -1425,6 +2795,8 @@ export default function App() {
           outboundEnd,
           returnDate,
           returnEnd,
+          adultCount: paxCounts.adults,
+          childrenCount: paxCounts.children,
           searchSource,
           mockMode: settings.mockMode,
           deepSearch: settings.deepSearch,
@@ -1435,12 +2807,56 @@ export default function App() {
         }
         void recordSearchHistory(snapshot, pwOutCount, pwRetCount)
       }
+
+      if (searchSource === 'api' && (serpDebugPwOutbound || serpDebugPwReturn)) {
+        const pwRtBundle =
+          serpDebugPwOutbound?.direction === 'roundTrip' ? serpDebugPwOutbound : null
+        const { data } = buildSerpCapturePersistPayload({
+          summary: {
+            searchGoal: 'priceWindow',
+            origins,
+            destinations,
+            outboundDate,
+            outboundEnd,
+            returnDate: tripType === 'round' ? returnDate : null,
+            returnEnd: tripType === 'round' ? returnEnd : null,
+          },
+          outbound: pwRtBundle ? null : serpDebugPwOutbound,
+          return: pwRtBundle ? null : serpDebugPwReturn,
+          roundTrip: pwRtBundle,
+        })
+        void saveSerpApiSearchCapture(
+          {
+            mockMode: settings.mockMode,
+            origins,
+            destinations,
+            outboundDate,
+            outboundEnd,
+            returnDate: tripType === 'round' ? returnDate : null,
+            returnEnd: tripType === 'round' ? returnEnd : null,
+            deepSearch: settings.deepSearch,
+            showHidden: settings.showHidden,
+            gl: settings.gl,
+            hl: settings.hl,
+            currency: settings.currency,
+            searchGoal: 'priceWindow',
+          },
+          data,
+        )
+      }
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Search failed')
+      const msg = e instanceof Error ? e.message : 'Search failed'
+      setError(msg.includes('\n') ? msg : formatSerpThrottleHelp(msg))
     } finally {
+      setActiveSerpHourBudget(null)
       setLoading(false)
       setSearchProgress(null)
-      if (!settings.mockMode) setSearchRefreshKey((k) => k + 1)
+      setPwActivityMessage(null)
+      seenComboKeysRef.current = new Set()
+      if (!settings.mockMode) {
+        setSearchRefreshKey((k) => k + 1)
+        if (searchSource === 'api') void refreshSerpUsage()
+      }
     }
   }, [
     settings,
@@ -1451,21 +2867,644 @@ export default function App() {
     outboundEnd,
     returnDate,
     returnEnd,
-    primaryDestination,
-    multipleDestinations,
     outHours,
     effRetHours,
     searchSource,
     persistSearch,
     loadCached,
     loadCachedSplitFallback,
+    loadRtPairCacheEntry,
+    loadRtPairCacheBatchEntries,
+    rtPairCacheRouteStatsFor,
+    persistRoundTripPairs,
     tzByIata,
     recordSearchHistory,
+    pwRtSortMode,
+    pwSearchMode,
+    pwPairFilters,
+    pwRtFilterOpts,
+    paxDesc,
+    serpUsageState,
+    refreshSerpUsage,
+    saveSerpApiSearchCapture,
+    settings.pwHourlySerpCalls,
   ])
+
+  const validatePriceWindowRequest = useCallback((): boolean => {
+    setError(null)
+    if (searchSource === 'api' && !settings.mockMode && !settings.apiKey.trim()) {
+      setError('Add your SerpApi key in Settings or enable mock mode.')
+      return false
+    }
+    if (!origins.length || !destinations.length) {
+      setError('Select at least one origin and one destination airport.')
+      return false
+    }
+    if (outboundDate > outboundEnd) {
+      setError('Outbound window: start date must be before end date.')
+      return false
+    }
+    if (tripType === 'round' && returnDate > returnEnd) {
+      setError('Return window: start date must be before end date.')
+      return false
+    }
+    if (searchSource === 'db' && settings.mockMode) {
+      setError('Mock mode has no SQLite cache. Use Search API or disable mock mode in Settings.')
+      return false
+    }
+    if (searchSource === 'db' && !dbReady) {
+      setError('Browser database is still opening. Wait a moment and try again.')
+      return false
+    }
+    return true
+  }, [
+    searchSource,
+    settings.mockMode,
+    settings.apiKey,
+    dbReady,
+    origins.length,
+    destinations.length,
+    outboundDate,
+    outboundEnd,
+    tripType,
+    returnDate,
+    returnEnd,
+  ])
+
+  const applyPwDeepenStateList = useCallback((nextStates: RoundTripPairDeepenState[]) => {
+    pwDeepenStatesRef.current = nextStates
+    setPwRoundTripDeepenStates(nextStates)
+    setPwRoundTripCombos(dedupeRoundTripCombos(nextStates.flatMap((s) => s.combos)))
+    setPwRoundTripPairMeta(
+      nextStates.map((s) =>
+        pairMetaFromInternal({
+          outDate: s.outDate,
+          retDate: s.retDate,
+          ranked: s.ranked,
+          fetchedCount: s.fetchedCount,
+          initialMinByRoute: s.initialMinByRoute,
+          globalInitialMin: s.globalInitialMin,
+        }),
+      ),
+    )
+  }, [])
+
+  const handleStopSerpSearch = useCallback(() => {
+    requestSerpSearchStop()
+    setCacheHint('Stopping — no new API calls after the current one finishes.')
+  }, [])
+
+  const pwSerpRunActive = loading || pwRefreshLoading || pwAirlineScanLoading
+
+  const pwReturnFetchTokenNote = useMemo(() => {
+    if (!pwSerpRunActive || !searchProgress) return null
+    return formatReturnFetchTokenNote(searchProgress, pwRoundTripDeepenStates)
+  }, [pwSerpRunActive, searchProgress, pwRoundTripDeepenStates])
+
+  // ── Return-data refresh helpers ───────────────────────────────────────────
+  /**
+   * Diff combos from `states` against `seenKeys` (already emitted this run),
+   * emit the most recent new-or-updated combo as an activity line. Mutates `seenKeys`.
+   * `beforeSnap` supplies pre-run prices so re-fetches show as updates when the price moved.
+   */
+  function drainActivityEvents(
+    states: RoundTripPairDeepenState[],
+    seenKeys: Set<string>,
+    beforeSnap: ComboSnapshot,
+    currency: string,
+  ): string | null {
+    let latestEvent: SearchActivityEvent | null = null
+    for (const s of states) {
+      for (const c of s.combos) {
+        const k = makeComboKey(c)
+        if (seenKeys.has(k)) continue
+        seenKeys.add(k)
+        const oldPrice = beforeSnap.get(k)
+        if (oldPrice !== undefined && oldPrice !== c.roundTripPrice) {
+          latestEvent = { kind: 'returnUpdated', combo: c, oldPrice, currency }
+        } else {
+          latestEvent = { kind: 'returnAdded', combo: c, currency }
+        }
+      }
+    }
+    return latestEvent ? formatActivityEvent(latestEvent) : null
+  }
+
+  /**
+   * Overwrite entries in `full` that appear in `refreshed` (matched by outDate+retDate),
+   * leaving all other states unchanged. Used to splice refresh results back in.
+   */
+  function mergeDeepenStatesIntoFull(
+    full: RoundTripPairDeepenState[],
+    refreshed: RoundTripPairDeepenState[],
+  ): RoundTripPairDeepenState[] {
+    const refreshedMap = new Map(refreshed.map((s) => [`${s.outDate}|${s.retDate}`, s]))
+    const merged = full.map((s) => refreshedMap.get(`${s.outDate}|${s.retDate}`) ?? s)
+    // Append any refreshed states for pairs that weren't in `full` (new pair scans)
+    for (const s of refreshed) {
+      const key = `${s.outDate}|${s.retDate}`
+      if (!full.some((f) => `${f.outDate}|${f.retDate}` === key)) merged.push(s)
+    }
+    return merged
+  }
+
+  // ── Return-data clear ─────────────────────────────────────────────────────
+  /** Show the inline "Clear N combos?" confirm by counting affected combos. */
+  const handleClearReturnData = useCallback(() => {
+    setPwRefreshEstimate(null) // dismiss any open refresh estimate confirm
+    const affected = pwRoundTripDeepenStates.filter((s) => {
+      if (pwDateBounds && !isDatePairInBounds(s.outDate, s.retDate, pwDateBounds)) return false
+      // Keep states that have at least one filter-passing ranked itinerary
+      return s.filteredRankedCount == null ? s.ranked.length > 0 : s.filteredRankedCount > 0
+    })
+    const comboCount = affected.reduce((sum, s) => sum + s.combos.length, 0)
+    setPwClearConfirmCount(comboCount)
+  }, [pwRoundTripDeepenStates, pwDateBounds])
+
+  /** Execute the clear: zero out combos + fetchedCount for filter-matching states. */
+  const confirmClearReturnData = useCallback(async () => {
+    setPwClearConfirmCount(null)
+    setPwRefreshStats(null)
+
+    const clearedKeys = new Set<string>()
+    const clearedStates = pwRoundTripDeepenStates
+      .filter((s) => {
+        if (pwDateBounds && !isDatePairInBounds(s.outDate, s.retDate, pwDateBounds)) return false
+        return s.filteredRankedCount == null ? s.ranked.length > 0 : s.filteredRankedCount > 0
+      })
+      .map((s) => {
+        clearedKeys.add(`${s.outDate}|${s.retDate}`)
+        return { ...s, combos: [], fetchedCount: 0 } as RoundTripPairDeepenState
+      })
+
+    const merged = pwRoundTripDeepenStates.map((s) =>
+      clearedKeys.has(`${s.outDate}|${s.retDate}`)
+        ? clearedStates.find((c) => c.outDate === s.outDate && c.retDate === s.retDate)!
+        : s,
+    )
+    applyPwDeepenStateList(merged)
+
+    // Persist cleared states to SQLite
+    await persistRoundTripPairs(
+      { origins, destinations, maxSegments: API_MAX_SEGMENTS, mockMode: settings.mockMode, paxDesc },
+      clearedStates,
+      clearedStates.map((s) => pairMetaFromInternal(s)),
+      tzByIata,
+      { flushToDisk: true },
+    )
+  }, [
+    pwRoundTripDeepenStates,
+    pwDateBounds,
+    applyPwDeepenStateList,
+    persistRoundTripPairs,
+    origins,
+    destinations,
+    settings.mockMode,
+    paxDesc,
+    tzByIata,
+  ])
+
+  // ── Refresh filtered returns ───────────────────────────────────────────────
+  const runRefreshReturnsSearch = useCallback(async () => {
+    if (settings.mockMode) {
+      setError('Refresh is not available in mock mode.')
+      return
+    }
+    if (!settings.apiKey.trim()) {
+      setError('Add your SerpApi key in Settings before refreshing.')
+      return
+    }
+
+    setError(null)
+    setPwRefreshStats(null)
+    clearSerpSearchStop()
+    setPwRefreshLoading(true)
+
+    // Snapshot before-state for stats comparison and price-delta activity messages
+    const beforeSnap = snapshotCombos(pwRoundTripCombos)
+    const beforeStates = [...pwRoundTripDeepenStates]
+    setPwActivityMessage(null)
+    seenComboKeysRef.current = new Set()
+    refreshBeforeSnapRef.current = beforeSnap
+
+    // Determine target date pairs: in-window states with filter-passing ranked entries.
+    // Clear their combos + reset fetchedCount so the allocator re-fetches them.
+    // Apply the current filter live (filteredRankedCount is stale when filters change
+    // without re-running a search) and apply filter-first reorder so the allocator
+    // fetches exactly 1 departure-token call per filter-passing route rather than
+    // (rankedIndex+1) calls due to rank-walk overshoot on unordered ranked arrays.
+    const clearedKeys = new Set<string>()
+    const clearedStates = pwRoundTripDeepenStates
+      .filter((s) => {
+        if (pwDateBounds && !isDatePairInBounds(s.outDate, s.retDate, pwDateBounds)) return false
+        // Use live filter instead of stale filteredRankedCount
+        if (pwRtFilterOpts) {
+          return s.ranked.some((r) => passesRtOutboundLegFilter(r.it, pwRtFilterOpts))
+        }
+        return s.ranked.length > 0
+      })
+      .map((s) => {
+        clearedKeys.add(`${s.outDate}|${s.retDate}`)
+        const base: RoundTripPairDeepenState = { ...s, combos: [], fetchedCount: 0 }
+        if (!pwRtFilterOpts) return base
+        // Filter-first reorder: put filter-passing unfetched outbounds first so the
+        // allocator finds them at index 0 and needs only 1 SerpApi call per route.
+        const reordered = reorderDeepenStateForLegFilters(base, pwRtFilterOpts)
+        let count = 0
+        for (const { it } of reordered.ranked) {
+          if (passesRtOutboundLegFilter(it, pwRtFilterOpts)) count++
+          else break
+        }
+        return { ...reordered, filteredRankedCount: count }
+      })
+
+    // Set up SerpApi hour budget (same system as regular price-window search)
+    const hourUsed =
+      serpUsageState.status === 'ok' ? (serpUsageState.data.this_hour_searches ?? 0) : 0
+    const accountHourLimit =
+      serpUsageState.status === 'ok'
+        ? serpUsageState.data.account_rate_limit_per_hour
+        : undefined
+    const hourLimit = effectivePwHourLimit(accountHourLimit, settings.pwHourlySerpCalls)
+    const budget = createSerpHourBudget({
+      hourLimit,
+      baselineUsed: hourUsed,
+      onChange: (snap) => {
+        setSearchProgress((prev) => prev ? { ...prev, hourUsed: snap.usedThisHour, hourLimit: snap.hourLimit } : null)
+      },
+    })
+    setActiveSerpHourBudget(budget)
+
+    const serpCtx = {
+      excludedAirports: PIPELINE_EXCLUDED_NONE,
+      destinations,
+    }
+    const baseInput: PriceWindowSearchInput = {
+      origins,
+      destinations,
+      startDate: outboundDate,
+      endDate: outboundEnd,
+      maxSegments: API_MAX_SEGMENTS,
+      mockMode: settings.mockMode,
+      apiKey: settings.apiKey,
+      maxTotalHours: null,
+      showHidden: false,
+      deepSearch: settings.deepSearch,
+      gl: settings.gl,
+      hl: settings.hl,
+      currency: settings.currency,
+      adults: paxCounts.adults,
+      children: paxCounts.children,
+      cabinClass,
+      roundTripSortMode: pwRtSortMode,
+      pairFilters: pwPairFilters,
+      rtLegFilterOpts: pwRtFilterOpts,
+      plannedHourlySerpCalls: settings.pwHourlySerpCalls,
+    }
+
+    try {
+      const result = await refreshFilteredReturns(
+        { ...baseInput, returnStartDate: returnDate, returnEndDate: returnEnd },
+        clearedStates,
+        serpCtx,
+        (progress) => setSearchProgress({
+          ...progress,
+          // Surface the pre-computed estimate total so the progress bar can show
+          // "N/total calls" instead of the internal pair-level counter.
+          estimatedTotalCalls: pwRefreshEstimateTotalRef.current > 0
+            ? pwRefreshEstimateTotalRef.current
+            : undefined,
+        }),
+        (partial) => {
+          const activity = drainActivityEvents(
+            partial.pairDeepenStates,
+            seenComboKeysRef.current,
+            refreshBeforeSnapRef.current,
+            settings.currency,
+          )
+          if (activity) setPwActivityMessage(activity)
+          applyPwDeepenStateList(
+            mergeDeepenStatesIntoFull(pwRoundTripDeepenStates, partial.pairDeepenStates),
+          )
+        },
+      )
+
+      // Merge refreshed states back into the full deepen state list
+      const finalMerged = mergeDeepenStatesIntoFull(pwRoundTripDeepenStates, result.pairDeepenStates)
+      applyPwDeepenStateList(finalMerged)
+
+      // Persist to SQLite
+      if (result.pairDeepenStates.length > 0) {
+        await persistRoundTripPairs(
+          { origins, destinations, maxSegments: API_MAX_SEGMENTS, mockMode: settings.mockMode, paxDesc },
+          result.pairDeepenStates,
+          result.pairMeta,
+          tzByIata,
+          { flushToDisk: true },
+        )
+      }
+
+      // Compute and show stats
+      const allAfterCombos = finalMerged.flatMap((s) => s.combos)
+      const stats = computeRefreshStats(
+        beforeSnap,
+        beforeStates,
+        finalMerged,
+        allAfterCombos,
+        pwRtFilterOpts,
+        result.pairsScanned,
+      )
+      setPwRefreshStats(stats)
+
+      if (result.pausedEarly) {
+        setError(result.pauseReason ?? 'Refresh paused — partial results shown.')
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Refresh failed')
+    } finally {
+      setActiveSerpHourBudget(null)
+      setSearchProgress(null)
+      setPwActivityMessage(null)
+      seenComboKeysRef.current = new Set()
+      pwRefreshEstimateTotalRef.current = 0
+      setPwRefreshLoading(false)
+      void refreshSerpUsage()
+    }
+  }, [
+    settings,
+    origins,
+    destinations,
+    outboundDate,
+    outboundEnd,
+    returnDate,
+    returnEnd,
+    pwRtSortMode,
+    pwPairFilters,
+    pwRtFilterOpts,
+    pwRoundTripCombos,
+    pwRoundTripDeepenStates,
+    pwDateBounds,
+    serpUsageState,
+    applyPwDeepenStateList,
+    persistRoundTripPairs,
+    paxCounts,
+    paxDesc,
+    tzByIata,
+    refreshSerpUsage,
+  ])
+
+  // ── Targeted airline scan (uses filter-panel airline selection) ───────────
+  const runAirlineTargetedScanCallback = useCallback(async () => {
+    const codes = pwIncludedAirlineCodes
+    if (codes.length === 0) {
+      setError('No valid IATA airline codes for the selected airlines (SerpApi requires 2-letter codes like QR).')
+      return
+    }
+    clearSerpSearchStop()
+    setPwAirlineScanLoading(true)
+    setPwRefreshStats(null)
+    setError(null)
+    setPwActivityMessage(null)
+    const beforeSnap = snapshotCombos(pwRoundTripCombos)
+    seenComboKeysRef.current = new Set()
+    refreshBeforeSnapRef.current = beforeSnap
+
+    const hourUsed =
+      serpUsageState?.status === 'ok' ? (serpUsageState.data.this_hour_searches ?? 0) : 0
+    const accountHourLimit =
+      serpUsageState?.status === 'ok'
+        ? serpUsageState.data.account_rate_limit_per_hour
+        : undefined
+    const hourLimit = effectivePwHourLimit(accountHourLimit, settings.pwHourlySerpCalls)
+    const budget = createSerpHourBudget({
+      hourLimit,
+      baselineUsed: hourUsed,
+      onChange: (snap) => {
+        setSearchProgress((prev) =>
+          prev
+            ? {
+                ...prev,
+                hourUsed: snap.usedThisHour,
+                hourLimit: snap.hourLimit,
+                sessionCalls: snap.sessionCalls,
+              }
+            : null,
+        )
+      },
+    })
+    setActiveSerpHourBudget(budget)
+    setSearchProgress({
+      phase: pwAirlineScanReturnOnly ? 'returnFetch' : 'pairScan',
+      current: 0,
+      total: 0,
+      includeAirlines: codes,
+    })
+
+    const serpCtx = {
+      excludedAirports: PIPELINE_EXCLUDED_NONE,
+      destinations,
+    }
+    const scanInput: PriceWindowSearchInput & {
+      returnStartDate: string
+      returnEndDate: string
+      targetAirlines: string[]
+      scanMode: 'outboundAndReturn' | 'returnOnly'
+    } = {
+      origins,
+      destinations,
+      startDate: outboundDate,
+      endDate: outboundEnd,
+      returnStartDate: returnDate,
+      returnEndDate: returnEnd,
+      maxSegments: API_MAX_SEGMENTS,
+      mockMode: settings.mockMode,
+      apiKey: settings.apiKey,
+      maxTotalHours: null,
+      showHidden: false,
+      deepSearch: false,
+      gl: settings.gl,
+      hl: settings.hl,
+      currency: settings.currency,
+      adults: paxCounts.adults,
+      children: paxCounts.children,
+      cabinClass,
+      roundTripSortMode: pwRtSortMode,
+      pairFilters: pwPairFilters,
+      rtLegFilterOpts: pwRtFilterOpts,
+      targetAirlines: codes,
+      scanMode: pwAirlineScanReturnOnly ? 'returnOnly' : 'outboundAndReturn',
+    }
+
+    try {
+      const result = await runAirlineTargetedScan(
+        scanInput,
+        pwRoundTripDeepenStates,
+        serpCtx,
+        (progress) => setSearchProgress(progress),
+        (partial) => {
+          const activity = drainActivityEvents(
+            partial.pairDeepenStates,
+            seenComboKeysRef.current,
+            refreshBeforeSnapRef.current,
+            settings.currency,
+          )
+          if (activity) setPwActivityMessage(activity)
+          applyPwDeepenStateList(
+            mergeDeepenStatesIntoFull(pwRoundTripDeepenStates, partial.pairDeepenStates),
+          )
+        },
+      )
+
+      const finalMerged = mergeDeepenStatesIntoFull(pwRoundTripDeepenStates, result.pairDeepenStates)
+      applyPwDeepenStateList(finalMerged)
+
+      if (result.pausedEarly) {
+        setError(result.pauseReason ?? 'Filtered airline refresh paused — partial results shown.')
+      }
+
+      if (result.pairDeepenStates.length > 0) {
+        await persistRoundTripPairs(
+          { origins, destinations, maxSegments: API_MAX_SEGMENTS, mockMode: settings.mockMode, paxDesc },
+          result.pairDeepenStates,
+          result.pairDeepenStates.map((s) => pairMetaFromInternal(s)),
+          tzByIata,
+          { flushToDisk: true },
+        )
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Filtered airline refresh failed')
+    } finally {
+      setActiveSerpHourBudget(null)
+      setSearchProgress(null)
+      setPwActivityMessage(null)
+      setPwAirlineScanLoading(false)
+      void refreshSerpUsage()
+    }
+  }, [
+    pwIncludedAirlineCodes,
+    pwAirlineScanReturnOnly,
+    settings,
+    origins,
+    destinations,
+    outboundDate,
+    outboundEnd,
+    returnDate,
+    returnEnd,
+    pwRtSortMode,
+    pwPairFilters,
+    pwRtFilterOpts,
+    pwRoundTripDeepenStates,
+    pwRoundTripCombos,
+    serpUsageState,
+    applyPwDeepenStateList,
+    persistRoundTripPairs,
+    paxCounts,
+    paxDesc,
+    tzByIata,
+    refreshSerpUsage,
+  ])
+
+  // ── Refresh call estimate ──────────────────────────────────────────────────
+  /**
+   * Compute an estimate of the API calls needed for "Refresh filtered returns"
+   * without making any network requests.  Called synchronously when the user
+   * clicks the button so they can confirm before anything fires.
+   */
+  const computePwRefreshEstimate = useCallback((): RefreshEstimate => {
+    const { pairs } = buildFilteredRoundTripDatePairs(
+      outboundDate,
+      outboundEnd,
+      returnDate,
+      returnEnd,
+      pwPairFilters,
+    )
+    const deepenByKey = new Map(
+      pwRoundTripDeepenStates.map((s) => [`${s.outDate}|${s.retDate}`, s]),
+    )
+    const scanCallsPerPair = pwRtSortMode === 'both' ? 2 : 1
+    let pairsNeedingScan = 0
+    let newReturnTokens = 0
+    let refreshTokens = 0
+    for (const { outDate, retDate } of pairs) {
+      const state = deepenByKey.get(`${outDate}|${retDate}`)
+      if (!state || state.ranked.length === 0) {
+        pairsNeedingScan++
+        continue
+      }
+      // Apply the CURRENT filter live instead of trusting state.filteredRankedCount,
+      // which is only updated during a search reorder — not when filters change in the UI.
+      const tokenCount = pwRtFilterOpts
+        ? state.ranked.filter((r) => passesRtOutboundLegFilter(r.it, pwRtFilterOpts)).length
+        : state.ranked.length
+      if (tokenCount === 0) continue
+      if (state.combos.length === 0) {
+        newReturnTokens += tokenCount
+      } else {
+        refreshTokens += tokenCount
+      }
+    }
+    return {
+      pairsNeedingScan,
+      pairScanCalls: pairsNeedingScan * scanCallsPerPair,
+      newReturnTokens,
+      refreshTokens,
+      totalCalls: pairsNeedingScan * scanCallsPerPair + newReturnTokens + refreshTokens,
+    }
+  }, [outboundDate, outboundEnd, returnDate, returnEnd, pwPairFilters, pwRoundTripDeepenStates, pwRtSortMode, pwRtFilterOpts])
+
+  /** First-click handler: compute estimate and show inline confirm (no API calls yet). */
+  const handleRefreshEstimate = useCallback(() => {
+    setPwClearConfirmCount(null)
+    const estimate = computePwRefreshEstimate()
+    pwRefreshEstimateTotalRef.current = estimate.totalCalls
+    setPwRefreshEstimate(estimate)
+  }, [computePwRefreshEstimate])
+
+  const requestPriceWindowSearch = useCallback(() => {
+    if (!validatePriceWindowRequest()) return
+    if (searchGoal === 'priceWindow' && searchSource === 'api' && !settings.mockMode) {
+      startTransition(() => setPwSearchConfirmOpen(true))
+      return
+    }
+    void runPriceWindowSearch(searchGoal === 'priceWindow' && tripType === 'round' ? { searchMode: 'tranche' } : undefined)
+  }, [
+    validatePriceWindowRequest,
+    searchGoal,
+    searchSource,
+    settings.mockMode,
+    tripType,
+    runPriceWindowSearch,
+  ])
+
+  const handlePwSearchProceed = useCallback(
+    (opts: { sortMode: RoundTripSortMode; pairFilters: PriceWindowPairFilters }) => {
+      setPwRtSortMode(opts.sortMode)
+      saveRoundTripSortMode(opts.sortMode)
+      setPwPairFilters(opts.pairFilters)
+      savePriceWindowPairFilters(opts.pairFilters)
+      setPwSearchConfirmOpen(false)
+      if (searchSource !== 'api') setSearchSource('api')
+      const runOpts = {
+        sortMode: opts.sortMode,
+        alsoSearchOneWay: false,
+        pairFilters: opts.pairFilters,
+        replaceOutbound: pwReplaceOutbound,
+        searchMode: tripType === 'round' ? ('tranche' as const) : pwSearchMode,
+      }
+      requestAnimationFrame(() => {
+        void runPriceWindowSearch(runOpts)
+      })
+    },
+    [runPriceWindowSearch, searchSource, tripType, pwSearchMode, pwReplaceOutbound],
+  )
 
   const applySearchHistory = useCallback(
     async (row: SearchHistoryRow) => {
       const s = row.snapshot
+      const snapPax = clampPaxCounts({
+        adults: s.adultCount ?? DEFAULT_PAX_COUNTS.adults,
+        children: s.childrenCount ?? DEFAULT_PAX_COUNTS.children,
+      })
       setOrigins(s.origins)
       setDestinations(s.destinations)
       setTripType(s.tripType)
@@ -1481,6 +3520,8 @@ export default function App() {
       setOutboundEnd(outEnd)
       setReturnDate(retStart)
       setReturnEnd(retEnd)
+      setAdultCount(snapPax.adults)
+      setChildrenCount(snapPax.children)
       setSearchSource(s.searchSource)
       update({
         mockMode: s.mockMode,
@@ -1500,8 +3541,6 @@ export default function App() {
       setMapHubFilter(new Set())
       setMapRouteFilter(null)
       setMapSoloFocus(null)
-      setPwOutResult(null)
-      setPwRetResult(null)
       setPwOutboundSel(null)
       setPwReturnSel(null)
       setPwRawOutPerDate([])
@@ -1549,7 +3588,7 @@ export default function App() {
         return
       }
 
-      const loadedOut = await loadCached(outParts)
+      const loadedOut = await loadCached({ ...outParts, paxDesc: formatPaxDesc(snapPax) })
       if (!loadedOut?.length) {
         setError(
           'No cached snapshot for this history entry. Run Search API once with the same route, dates, flex, and Settings.',
@@ -1575,7 +3614,7 @@ export default function App() {
         mockMode: s.mockMode,
         ...hashRow,
       }
-      const loadedRet = await loadCached(retParts)
+      const loadedRet = await loadCached({ ...retParts, paxDesc: formatPaxDesc(snapPax) })
       if (!loadedRet?.length) {
         setError('Return leg not in cache for this history entry. Run a full round-trip Search API search again.')
         setRawReturn([])
@@ -1586,7 +3625,10 @@ export default function App() {
     [loadCached, update],
   )
 
-  const applySavedSearchPayload = useCallback((p: SavedSearchPayloadV1) => {
+  const applySavedSearchPayload = useCallback((
+    p: SavedSearchPayloadV1,
+    opts?: { skipFilters?: boolean },
+  ) => {
     if (p.v !== 1) return
     setOrigins([...p.origins])
     setDestinations([...p.destinations])
@@ -1595,40 +3637,10 @@ export default function App() {
     setOutboundEnd(p.outboundEnd ?? addDaysIso(p.outboundDate, p.flexDays ?? 0))
     setReturnDate(p.returnDate)
     setReturnEnd(p.returnEnd ?? addDaysIso(p.returnDate, p.flexDays ?? 0))
-    setReturnCustomFilters(p.returnCustomFilters)
-    setOutHours({ ...p.outHours })
-    setRetHours({ ...p.retHours })
-    setOutPrice({ ...p.outPrice })
-    setRetPrice({ ...p.retPrice })
-    setOutTimeRange({ ...p.outTimeRange })
-    setRetTimeRange({ ...p.retTimeRange })
-    setOutLegDurationMatch(p.outLegDurationMatch)
-    setRetLegDurationMatch(p.retLegDurationMatch)
-    setOutStopsMin(p.outStopsMin)
-    setOutStopsMax(p.outStopsMax)
-    setRetStopsMin(p.retStopsMin)
-    setRetStopsMax(p.retStopsMax)
-    setLayoverRegionOn(() => {
-      const o = {} as Record<RegionId, boolean>
-      for (const k of REGION_IDS_IN_UI_ORDER) {
-        o[k] = p.layoverRegionOn[k] ?? true
-      }
-      return o
-    })
-    setLayoverAirportOff(new Set(p.layoverAirportOff.map((c) => c.trim().toUpperCase())))
-    setLayoverGeoFilterActive(p.layoverGeoFilterActive)
-    setExcludeTechnical(p.excludeTechnical)
-    setShowOpenJaw(p.showOpenJaw)
-    setSortOut(p.sortOut)
-    setSortReturn(p.sortReturn)
+    setAdultCount(p.adultCount ?? DEFAULT_PAX_COUNTS.adults)
+    setChildrenCount(p.childrenCount ?? DEFAULT_PAX_COUNTS.children)
+    setCabinClass(p.cabinClass ?? 1)
     setSearchSource(p.searchSource)
-    setTimeBucketsOut(new Set(p.timeBucketsOut))
-    setTimeBucketsRet(new Set(p.timeBucketsRet))
-    setDisplayTimezone(p.displayTimezone)
-    setUniqueRoutesOnly(p.uniqueRoutesOnly)
-    setAircraftSelectedCodes([...p.aircraftSelectedCodes].sort((a, b) => a.localeCompare(b)))
-    setAircraftMatchMode(p.aircraftMatchMode)
-    setAirlineExcludedCodes(new Set(p.airlineExcludedCodes.map((c) => c.trim().toUpperCase())))
     update({
       mockMode: p.settingsSearch.mockMode,
       gl: p.settingsSearch.gl,
@@ -1639,6 +3651,48 @@ export default function App() {
       layoverLongMinHours: p.settingsSearch.layoverLongMinHours,
       layoverShortMaxHours: p.settingsSearch.layoverShortMaxHours,
     })
+    if (opts?.skipFilters) {
+      setMapHubFilter(new Set())
+      setMapRouteFilter(null)
+      setMapSoloFocus(null)
+      setRawOut([])
+      setRawReturn([])
+      setHasSearched(false)
+      setError(null)
+      setSerpCapture({ outbound: null, return: null })
+      return
+    }
+    const n = normalizeFilterSnapshot({
+      airlineExcludedCodes: p.airlineExcludedCodes,
+      outStopsMin: p.outStopsMin,
+      outStopsMax: p.outStopsMax,
+      retStopsMin: p.retStopsMin,
+      retStopsMax: p.retStopsMax,
+      outHours: p.outHours,
+      retHours: p.retHours,
+      outPrice: p.outPrice,
+      retPrice: p.retPrice,
+      outTimeRange: p.outTimeRange,
+      retTimeRange: p.retTimeRange,
+      outLegDurationMatch: p.outLegDurationMatch,
+      retLegDurationMatch: p.retLegDurationMatch,
+      timeBucketsOut: p.timeBucketsOut,
+      timeBucketsRet: p.timeBucketsRet,
+      layoverRegionOn: p.layoverRegionOn,
+      layoverAirportOff: p.layoverAirportOff,
+      layoverGeoFilterActive: p.layoverGeoFilterActive,
+      excludeTechnical: p.excludeTechnical,
+      showOpenJaw: p.showOpenJaw,
+      dedupeMode: p.dedupeMode ?? 'route',
+      returnCustomFilters: p.returnCustomFilters,
+      aircraftSelectedCodes: p.aircraftSelectedCodes,
+      aircraftMatchMode: p.aircraftMatchMode,
+      sortOut: p.sortOut,
+      sortReturn: p.sortReturn,
+    })
+    applyFilterPreset(n)
+    setDisplayTimezone(p.displayTimezone ?? '')
+    setConfigPresetRevision((r) => r + 1)
     setMapHubFilter(new Set())
     setMapRouteFilter(null)
     setMapSoloFocus(null)
@@ -1647,7 +3701,7 @@ export default function App() {
     setHasSearched(false)
     setError(null)
     setSerpCapture({ outbound: null, return: null })
-  }, [update])
+  }, [update, applyFilterPreset])
 
   function buildCurrentSavedSearchPayload(): SavedSearchPayloadV1 {
     return {
@@ -1659,6 +3713,9 @@ export default function App() {
       outboundEnd,
       returnDate,
       returnEnd,
+      adultCount,
+      childrenCount,
+      cabinClass,
       returnCustomFilters,
       outHours: { ...outHours },
       retHours: { ...retHours },
@@ -1683,7 +3740,7 @@ export default function App() {
       timeBucketsOut: [...timeBucketsOut],
       timeBucketsRet: [...timeBucketsRet],
       displayTimezone,
-      uniqueRoutesOnly,
+      dedupeMode,
       aircraftSelectedCodes: [...aircraftSelectedCodes],
       aircraftMatchMode,
       airlineExcludedCodes: [...airlineExcludedCodes].sort((a, b) => a.localeCompare(b)),
@@ -1717,13 +3774,25 @@ export default function App() {
     void loadDefaultSavedSearchPayload().then((p) => {
       if (cancelled || !p || defaultSearchAppliedRef.current) return
       defaultSearchAppliedRef.current = true
-      applySavedSearchPayload(p)
+      const defPreset = readDefaultConfigPreset()
+      // When a ★ config preset is active it is the source of truth for the whole form
+      // (origins, dates AND filters).  The saved search still provides API-level settings
+      // (gl, hl, currency, deepSearch…) which are applied first, then the preset overrides
+      // every form field so the app always boots into the exact state the preset encodes.
+      // Without this, applySavedSearchPayload would leave the saved-search origins/dates in
+      // place and only applyFilterFieldsFromConfig would run — silently ignoring the preset's
+      // route/date portion and forcing the user to switch presets and back to get them.
+      applySavedSearchPayload(p, { skipFilters: Boolean(defPreset) })
+      if (defPreset) {
+        applyConfigPreset(defPreset.config)
+        setConfigPresetId(defPreset.id)
+      }
       setCacheHint('Loaded your default search form.')
     })
     return () => {
       cancelled = true
     }
-  }, [dbReady, loadDefaultSavedSearchPayload, applySavedSearchPayload])
+  }, [dbReady, loadDefaultSavedSearchPayload, applySavedSearchPayload, applyConfigPreset])
 
   const saveOutboundCard = useCallback(
     (it: NormalizedItinerary) => {
@@ -1757,84 +3826,62 @@ export default function App() {
     [origins, destinations, returnDate, saveSavedResult],
   )
 
-  /**
-   * Outbound selection handler for Price Window panels.
-   * When the user picks a different outbound itinerary (incl. switching airlines via the
-   * drilldown Options list), automatically find the best matching return:
-   *   1. Same carrier on the reverse route (reverseRouteKey preserves carrier codes)
-   *   2. Prefer the same return date if it exists in the same-carrier route
-   *   3. Otherwise pick the cheapest date on that carrier's return route
-   *   4. If no same-carrier return exists, pick the cheapest overall return
-   */
+  /** Outbound pick → auto return: same return date when valid, else cheapest bundled RT for that outbound. */
   const handleOutboundSelect = useCallback(
     (sel: { routeKey: string; date: string; pickedIdx?: number; selectedItinerary?: NormalizedItinerary } | null) => {
       setPwOutboundSel(sel)
 
-      if (!sel || !pwRetResultFiltered) return
+      if (!sel || !pwRetResultFiltered || !pwOutResultFiltered) return
 
-      const currentRetDate = pwReturnSel?.date ?? null
-      const revKey = reverseRouteKey(sel.routeKey)
-
-      let bestRouteKey: string | null = null
-      let bestDate: string | null = null
-      let bestIt: NormalizedItinerary | null = null
-      let bestPrice = Infinity
-
-      // Phase 1: same-carrier reverse route
-      const sameCarrierDateMap = pwRetResultFiltered.perRouteByDate.get(revKey)
-      if (sameCarrierDateMap) {
-        bestRouteKey = revKey
-        if (currentRetDate && sameCarrierDateMap.has(currentRetDate)) {
-          // Same carrier + same date — ideal match
-          const bucket = sameCarrierDateMap.get(currentRetDate)!
-          bestDate = currentRetDate
-          bestIt = bucket.bestItinerary
-          bestPrice = bucket.minPrice
-        } else {
-          // Same carrier, pick cheapest date
-          for (const [d, bucket] of sameCarrierDateMap) {
-            if (bucket.minPrice < bestPrice) {
-              bestPrice = bucket.minPrice
-              bestDate = d
-              bestIt = bucket.bestItinerary
-            }
-          }
-        }
-      }
-
-      // Phase 2: no same-carrier return — fall back to any route, prefer same date then cheapest
-      if (!bestIt) {
-        for (const [rk, dateMap] of pwRetResultFiltered.perRouteByDate) {
-          if (currentRetDate && dateMap.has(currentRetDate)) {
-            const bucket = dateMap.get(currentRetDate)!
-            if (bucket.minPrice < bestPrice) {
-              bestPrice = bucket.minPrice
-              bestDate = currentRetDate
-              bestIt = bucket.bestItinerary
-              bestRouteKey = rk
-            }
-          }
-        }
-        if (!bestIt) {
-          for (const [rk, dateMap] of pwRetResultFiltered.perRouteByDate) {
-            for (const [d, bucket] of dateMap) {
-              if (bucket.minPrice < bestPrice) {
-                bestPrice = bucket.minPrice
-                bestDate = d
-                bestIt = bucket.bestItinerary
-                bestRouteKey = rk
-              }
-            }
-          }
-        }
-      }
-
-      if (bestIt && bestDate && bestRouteKey) {
-        setPwReturnSel({ routeKey: bestRouteKey, date: bestDate, pickedIdx: 0, selectedItinerary: bestIt })
-      }
+      const picked = pickPwReturnForOutbound({
+        outboundRouteKey: sel.routeKey,
+        outboundDate: sel.date,
+        preferredRetDate: pwReturnSel?.date ?? null,
+        outResult: pwOutResultFiltered,
+        retResult: pwRetResultFiltered,
+        combos: pwRoundTripFiltered,
+        pairMeta: pwPairMetaMapFiltered,
+        dateBounds: pwDateBounds,
+        roundTripDeepenStates: pwRoundTripDeepenStates,
+      })
+      setPwReturnSel(picked)
     },
-    [pwRetResultFiltered, pwReturnSel?.date],
+    [
+      pwRetResultFiltered,
+      pwOutResultFiltered,
+      pwReturnSel?.date,
+      pwRoundTripFiltered,
+      pwPairMetaMapFiltered,
+      pwDateBounds,
+      pwRoundTripDeepenStates,
+    ],
   )
+
+  // When scan data arrives after an outbound pick, apply the same return auto-pick rule.
+  useEffect(() => {
+    if (!pwOutboundSel || pwReturnSel || !pwRetResultFiltered || !pwOutResultFiltered) return
+    const picked = pickPwReturnForOutbound({
+      outboundRouteKey: pwOutboundSel.routeKey,
+      outboundDate: pwOutboundSel.date,
+      preferredRetDate: null,
+      outResult: pwOutResultFiltered,
+      retResult: pwRetResultFiltered,
+      combos: pwRoundTripFiltered,
+      pairMeta: pwPairMetaMapFiltered,
+      dateBounds: pwDateBounds,
+      roundTripDeepenStates: pwRoundTripDeepenStates,
+    })
+    if (picked) setPwReturnSel(picked)
+  }, [
+    pwOutboundSel,
+    pwReturnSel,
+    pwRetResultFiltered,
+    pwOutResultFiltered,
+    pwRoundTripFiltered,
+    pwPairMetaMapFiltered,
+    pwDateBounds,
+    pwRoundTripDeepenStates,
+  ])
 
   /** Save outbound (+ optional return) picked from the Price Window to Saved Results. */
   const savePriceWindowSelection = useCallback(
@@ -1983,7 +4030,7 @@ export default function App() {
     // Stops and durations
     setOutStopsMin(''); setOutStopsMax(''); setRetStopsMin(''); setRetStopsMax('')
     setOutHours({ ...EMPTY_HOURS }); setRetHours({ ...EMPTY_HOURS })
-    setOutLegDurationMatch('all'); setRetLegDurationMatch('all')
+    setOutLegDurationMatch('any'); setRetLegDurationMatch('any')
     // Price
     setOutPrice({ ...EMPTY_PRICE }); setRetPrice({ ...EMPTY_PRICE })
     // Time and timezone
@@ -2012,166 +4059,493 @@ export default function App() {
   }
 
   return (
-    <div className="app">
-      <header className="top hero-bar">
-        <div className="hero-bar-title-nav">
-          <h1>Flight itinerary discovery</h1>
-          <nav className="main-tabs" aria-label="Primary navigation">
-            <button
-              type="button"
-              className={`main-tab${mainTab === 'search' ? ' main-tab--active' : ''}`}
-              onClick={() => setMainTab('search')}
-            >
+    <div className="dx">
+      {/* ── HEADER ────────────────────────────────────────────── */}
+      <div className="dx-head">
+        {/* Row 1: logo · tabs · quota · settings */}
+        <div className="dx-bar1">
+          <div className="dx-logo">
+            <img src="/logo.png" alt="Flight Itinerary Discovery" className="dx-logo-img" />
+            <span className="dx-word">Flight Itinerary <small>Discovery</small></span>
+          </div>
+          <div className="dx-tabs">
+            <button type="button" className={`dx-tab${mainTab === 'search' ? ' on' : ''}`} onClick={() => setMainTab('search')}>
               Search
             </button>
-            <button
-              type="button"
-              className={`main-tab${mainTab === 'savedSearches' ? ' main-tab--active' : ''}`}
-              onClick={() => setMainTab('savedSearches')}
-            >
+            <button type="button" className={`dx-tab${mainTab === 'savedSearches' ? ' on' : ''}`} onClick={() => setMainTab('savedSearches')}>
               Saved searches
-              {savedSearches.length > 0 ? (
-                <span className="main-tab-count" aria-hidden>
-                  {savedSearches.length}
-                </span>
-              ) : null}
+              {savedSearches.length > 0 && <span className="badge">{savedSearches.length}</span>}
             </button>
-            <button
-              type="button"
-              className={`main-tab${mainTab === 'savedResults' ? ' main-tab--active' : ''}`}
-              onClick={() => setMainTab('savedResults')}
-            >
+            <button type="button" className={`dx-tab${mainTab === 'savedResults' ? ' on' : ''}`} onClick={() => setMainTab('savedResults')}>
               Saved results
-              {savedResults.length > 0 ? (
-                <span className="main-tab-count" aria-hidden>
-                  {savedResults.length}
-                </span>
-              ) : null}
-            </button>
-          </nav>
-        </div>
-        <SerpApiUsageChip
-          apiKey={settings.apiKey}
-          status={serpUsageState.status}
-          data={serpUsageState.status === 'ok' ? serpUsageState.data : undefined}
-          fetchedAt={serpUsageState.status === 'ok' ? serpUsageState.fetchedAt : undefined}
-          errorMessage={serpUsageState.status === 'error' ? serpUsageState.message : undefined}
-          onRefresh={() => void refreshSerpUsage()}
-        />
-        <button type="button" className="btn btn-secondary" onClick={() => setSettingsOpen(true)}>
-          Settings
-        </button>
-      </header>
-
-      <main className="main-with-summary">
-        {mainTab === 'search' ? (
-          <>
-        <SearchSummaryBar
-          origins={origins}
-          destinations={destinations}
-          tripType={tripType}
-          outboundDate={outboundDate}
-          returnDate={returnDate}
-          passengerSummary="1 adult · Economy"
-          hasSearched={hasSearched}
-          outboundStats={outboundInsightStats}
-          currency={settings.currency}
-          searchPanelOpen={searchPanelOpen}
-          onToggleSearchPanel={() => setSearchPanelOpen((o) => !o)}
-          history={searchHistory}
-          onApplyHistory={(row) => void applySearchHistory(row)}
-          loading={loading}
-        />
-
-        <div className={`layout${!searchPanelOpen ? ' layout--panel-hidden' : ''}${returnCustomFilters && tripType === 'round' ? ' layout--wide-panel' : ''}`}>
-          {!searchPanelOpen && (
-            <button
-              type="button"
-              className="btn btn-secondary btn-tiny search-panel-show-btn"
-              onClick={() => setSearchPanelOpen(true)}
-              title="Show search panel"
-            >
-              ☰ Search
-            </button>
-          )}
-          <div className={searchPanelOpen ? 'search-panel-animated' : 'search-panel-animated search-panel-collapsed'}>
-        <section className="panel search-panel panel-compact">
-          <div className="search-panel-header">
-            <h2 className="h2">Search</h2>
-            <button
-              type="button"
-              className="btn btn-ghost btn-tiny search-panel-hide-btn"
-              onClick={() => setSearchPanelOpen(false)}
-              title="Hide search panel"
-            >
-              ✕ Hide
+              {savedResults.length > 0 && <span className="badge">{savedResults.length}</span>}
             </button>
           </div>
+          <div className="dx-bar1-right">
+            {settings.apiKey.trim() && serpUsageState.status === 'ok' && (() => {
+              const d = serpUsageState.data
+              const used = d.this_month_usage ?? 0
+              const total = d.searches_per_month ?? 5000
+              const pct = total > 0 ? Math.min(100, Math.round(used / total * 100)) : 0
+              const left = d.total_searches_left ?? Math.max(0, total - used)
+              const syncStr = serpUsageState.fetchedAt
+                ? serpUsageState.fetchedAt.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+                : null
+              return (
+                <div className="dx-quota">
+                  <div>
+                    <div className="lab">SerpAPI quota</div>
+                    <div className="fig"><b>{used.toLocaleString()}</b> <span>/ {total.toLocaleString()}</span></div>
+                  </div>
+                  <div className="dx-meter">
+                    <div className="track"><div className="fill" style={{ width: `${pct}%` }}/></div>
+                    <div className="sub">
+                      <span>{left.toLocaleString()} left</span>
+                      {syncStr && <span>synced {syncStr}</span>}
+                    </div>
+                  </div>
+                  <button className="dx-iconbtn" title="Refresh quota" onClick={() => void refreshSerpUsage()}>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg>
+                  </button>
+                </div>
+              )
+            })()}
+            {settings.apiKey.trim() && serpUsageState.status === 'error' && (
+              <span className="dx-spill" style={{ fontSize: 11.5 }}>
+                <span className="sw" style={{ background: 'var(--red)' }}/>
+                SerpAPI ⚠
+              </span>
+            )}
+            <button type="button" className="dx-settings" onClick={() => setSettingsOpen(true)}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3h.1A1.7 1.7 0 0 0 10 3.1V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8v.1a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+              Settings
+            </button>
+          </div>
+        </div>
 
-          {/* ── Top action bar: always visible, no scrolling needed ── */}
-          <div className="search-top-bar">
-            <fieldset className="field-tight fieldset-inline search-top-bar-source">
-              <legend className="label">Goal</legend>
-              <label className="check check-inline">
-                <input
-                  type="radio"
-                  name="searchGoal"
-                  checked={searchGoal === 'discovery'}
-                  onChange={() => setSearchGoal('discovery')}
-                />
-                Discovery
-              </label>
-              <label className="check check-inline">
-                <input
-                  type="radio"
-                  name="searchGoal"
-                  checked={searchGoal === 'priceWindow'}
-                  onChange={() => setSearchGoal('priceWindow')}
-                />
-                Price window
-              </label>
-            </fieldset>
-            <fieldset className="field-tight fieldset-inline search-top-bar-source">
-              <legend className="label">Source</legend>
-              <label className="check check-inline">
-                <input
-                  type="radio"
-                  name="searchSrcTop"
-                  checked={searchSource === 'api'}
-                  onChange={() => setSearchSource('api')}
-                />
-                API
-              </label>
-              <label className="check check-inline">
-                <input
-                  type="radio"
-                  name="searchSrcTop"
-                  checked={searchSource === 'db'}
-                  onChange={() => setSearchSource('db')}
-                />
-                Database
-              </label>
-            </fieldset>
+        {/* Row 2: route · trip params · status pills · stats · history */}
+        {mainTab === 'search' && (
+          <div className="dx-bar2">
+            <div className="dx-route">
+              <div className="dx-route-row">
+                {origins.map((o, i) => (
+                  <span key={o} className="dx-iata">{i > 0 && <span className="dx-iata-sep">/</span>}{o}</span>
+                ))}
+                {origins.length === 0 && <span className="dx-iata dx-iata-empty">—</span>}
+              </div>
+              <div className="dx-route-mid">
+                <span className="dx-route-arr">→</span>
+              </div>
+              <div className="dx-route-row">
+                {destinations.map((d, i) => (
+                  <span key={d} className="dx-iata">{i > 0 && <span className="dx-iata-sep">/</span>}{d}</span>
+                ))}
+                {destinations.length === 0 && <span className="dx-iata dx-iata-empty">—</span>}
+              </div>
+            </div>
+            <div className="dx-trip">
+              <div className="params">
+                <b>{outboundDate}{tripType === 'round' ? ` — ${returnDate}` : ''}</b>
+                <span className="sep"/>
+                {passengerSummary}
+                <span className="sep"/>
+                <b>{tripType === 'round' ? 'Round trip' : 'One way'}</b>
+              </div>
+              {cacheHint && cacheHint !== 'Loaded your default search form.' && (
+                <div className="cache">{cacheHint}</div>
+              )}
+            </div>
+            {pwSerpRunActive && searchProgress && (
+              <div className="dx-status">
+                <span className="dx-spill">
+                  <span className="sw" style={{ background: 'var(--amber)' }}/>
+                  {formatSearchProgress(searchProgress)}
+                  {searchSource === 'api' && !settings.mockMode && (
+                    <button
+                      type="button"
+                      className="btn btn-xs btn-danger"
+                      style={{ marginLeft: 6, height: 20, padding: '0 6px', fontSize: 10.5 }}
+                      onClick={handleStopSerpSearch}
+                    >
+                      Stop
+                    </button>
+                  )}
+                </span>
+                {pwActivityMessage && (
+                  <span className="dx-spill" style={{ maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {pwActivityMessage}
+                  </span>
+                )}
+              </div>
+            )}
+            {error && (
+              <div className="dx-status">
+                <span className="dx-spill" style={{ borderColor: 'rgba(239,90,90,0.4)', background: 'rgba(239,90,90,0.08)', color: 'var(--red)' }}>
+                  <span className="sw" style={{ background: 'var(--red)' }}/>{error}
+                </span>
+              </div>
+            )}
+            <div className="dx-bar2-stats">
+              {hasSearched && (
+                <span className="dx-live">
+                  <span className="pulse"/>
+                  {searchSummaryStats.count} result{searchSummaryStats.count !== 1 ? 's' : ''}
+                </span>
+              )}
+              {hasSearched && searchSummaryStats.cheapest != null && (
+                <div className="dx-fig">
+                  <span className="v cheap">{fmtMoney(searchSummaryStats.cheapest, settings.currency)}</span>
+                  <span className="k">Cheapest</span>
+                </div>
+              )}
+              {hasSearched && searchSummaryStats.medianPrice != null && (
+                <div className="dx-fig">
+                  <span className="v">{fmtMoney(searchSummaryStats.medianPrice, settings.currency)}</span>
+                  <span className="k">Median</span>
+                </div>
+              )}
+              {hasSearched && searchSummaryStats.highest != null && (
+                <div className="dx-fig">
+                  <span className="v dear">{fmtMoney(searchSummaryStats.highest, settings.currency)}</span>
+                  <span className="k">Highest</span>
+                </div>
+              )}
+              {searchHistory.length > 0 && (
+                <select
+                  className="dx-hist"
+                  value=""
+                  onChange={(e) => {
+                    const row = searchHistory.find((r) => String(r.id) === e.target.value)
+                    if (row) void applySearchHistory(row)
+                  }}
+                  style={{ background: 'var(--raise)', border: '1px solid var(--line)', color: 'var(--ink-1)', borderRadius: 9, padding: '8px 12px', fontSize: 12.5, fontFamily: 'inherit' }}
+                >
+                  <option value="" disabled>History · open recent…</option>
+                  {searchHistory.slice(0, 15).map((r) => (
+                    <option key={r.id} value={String(r.id)}>
+                      {`${(r.snapshot.origins ?? []).join(',')}→${(r.snapshot.destinations ?? []).join(',')}`}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* ── BODY ──────────────────────────────────────────────── */}
+      {mainTab === 'search' ? (
+        <div className="dx-body">
+          {/* LEFT RAIL */}
+          {searchPanelOpen ? (
+            <div className={`dx-rail${returnCustomFilters && tripType === 'round' ? ' dx-rail--wide' : ''}`}>
+              <div className="dx-rail-hd">
+                <h3>Search</h3>
+                <button className="hide" onClick={() => setSearchPanelOpen(false)}>✕ Hide</button>
+              </div>
+              <div className="dx-rail-scroll">
+              {/* --- Run section --- */}
+              <div className="dx-sec">
+                <div className="dx-two" style={{ marginBottom: 16 }}>
+                  <div>
+                    <div className="rl">Goal</div>
+                    <div className="dx-radio">
+                      <div className={`rr ${searchGoal === 'discovery' ? 'on' : ''}`} onClick={() => handleSearchGoalChange('discovery')}><span className="ring"/>Discovery</div>
+                      <div className={`rr ${searchGoal === 'priceWindow' ? 'on' : ''}`} onClick={() => handleSearchGoalChange('priceWindow')}><span className="ring"/>Price window</div>
+                    </div>
+                  </div>
+                  <div>
+                    <div className="rl">Source</div>
+                    <div className="dx-radio">
+                      <div className={`rr ${searchSource === 'api' ? 'on' : ''}`} onClick={() => setSearchSource('api')}><span className="ring"/>API</div>
+                      <div className={`rr ${searchSource === 'db' ? 'on' : ''}`} onClick={() => setSearchSource('db')}><span className="ring"/>Database</div>
+                    </div>
+                  </div>
+                </div>
+                {/* PW sort, tranche, replace-outbound options kept inline */}
+            {searchGoal === 'priceWindow' && searchSource === 'api' && !settings.mockMode && tripType === 'round' && (
+              <div className="search-top-bar-sort" role="group" aria-labelledby="serpapi-sort-label">
+                <span id="serpapi-sort-label" className="label search-top-bar-sort-label">
+                  SerpApi sort
+                </span>
+                <label
+                  className="check check-inline"
+                  title="Price-sorted round-trip query per date pair (1 query/pair if duration off)"
+                >
+                  <input
+                    type="checkbox"
+                    checked={pwRtSortFlags.price}
+                    onChange={(e) => {
+                      const on = e.target.checked
+                      if (!on && !pwRtSortFlags.duration) return
+                      setPwRtSortFromFlags(on, pwRtSortFlags.duration)
+                    }}
+                  />
+                  Price
+                </label>
+                <label
+                  className="check check-inline"
+                  title="Duration-sorted round-trip query per date pair (1 query/pair if price off)"
+                >
+                  <input
+                    type="checkbox"
+                    checked={pwRtSortFlags.duration}
+                    onChange={(e) => {
+                      const on = e.target.checked
+                      if (!on && !pwRtSortFlags.price) return
+                      setPwRtSortFromFlags(pwRtSortFlags.price, on)
+                    }}
+                  />
+                  Duration
+                </label>
+              </div>
+            )}
+            {searchGoal === 'priceWindow' && tripType === 'round' && searchSource === 'api' && !settings.mockMode && (
+              <div className="search-top-bar-tranche">
+                <p className="muted tiny search-top-bar-tranche-hint">
+                  First run: full date-pair grid, then remaining budget for return fetches (50-25-25).
+                </p>
+                <p className="muted tiny search-top-bar-tranche-hint">
+                  Later runs: {settings.pwHourlySerpCalls} return fetches (50-25-25) — existing grid kept.
+                </p>
+                {pwHasExistingGrid && (
+                  <label
+                    className="check search-top-bar-tranche-continue"
+                    title="Unchecked = later run (continue). Checked = first run again (replace grid for this window)."
+                  >
+                    <input
+                      type="checkbox"
+                      checked={pwReplaceOutbound}
+                      onChange={(e) => setPwReplaceOutbound(e.target.checked)}
+                    />
+                    Replace existing outbound
+                  </label>
+                )}
+              </div>
+            )}
             <button
               type="button"
-              className="btn btn-primary btn-search"
-              disabled={loading}
-              onClick={() => searchGoal === 'priceWindow' ? void runPriceWindowSearch() : void runSearch()}
+              className="dx-run"
+              disabled={loading || pwRefreshLoading}
+              onClick={() => searchGoal === 'priceWindow' ? requestPriceWindowSearch() : void runSearch()}
             >
-              {loading
-                ? searchProgress
-                  ? `${searchProgress.phase === 'outbound' ? 'Outbound' : 'Return'} ${searchProgress.current}/${searchProgress.total} dates…`
-                  : 'Searching…'
-                : 'Search'}
+              {loading ? 'Searching…' : searchGoal === 'priceWindow' ? 'Run price window search' : 'Search'}
             </button>
             {settings.mockMode && <span className="muted tiny">Mock</span>}
-            {cacheHint && <span className="muted tiny search-top-bar-hint">{cacheHint}</span>}
-            {error && <span className="error-inline">{error}</span>}
-          </div>
+            {/* ── Return refresh section (price window round-trip only) ── */}
+            {searchGoal === 'priceWindow' && tripType === 'round' && searchSource === 'api' && !settings.mockMode && (
+              <div className="search-top-bar-refresh">
+                {pwClearConfirmCount !== null ? (
+                  <div className="search-top-bar-refresh-confirm">
+                    <span className="muted tiny">
+                      Clear {pwClearConfirmCount} return combo{pwClearConfirmCount === 1 ? '' : 's'} for filter-matching pairs?
+                    </span>
+                    <button
+                      type="button"
+                      className="btn btn-xs btn-danger"
+                      onClick={() => void confirmClearReturnData()}
+                    >
+                      Clear
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-xs btn-secondary"
+                      onClick={() => setPwClearConfirmCount(null)}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                ) : pwRefreshEstimate !== null ? (
+                  <div className="search-top-bar-refresh-estimate">
+                    <span className="muted tiny">
+                      ~{pwRefreshEstimate.totalCalls} API call{pwRefreshEstimate.totalCalls === 1 ? '' : 's'} estimated
+                      {pwRefreshEstimate.pairsNeedingScan > 0 && (
+                        ` · ${pwRefreshEstimate.pairsNeedingScan} pair${pwRefreshEstimate.pairsNeedingScan === 1 ? '' : 's'} with no outbound (${pwRefreshEstimate.pairScanCalls} scan call${pwRefreshEstimate.pairScanCalls === 1 ? '' : 's'})`
+                      )}
+                      {pwRefreshEstimate.newReturnTokens > 0 && (
+                        ` · ${pwRefreshEstimate.newReturnTokens} outbound with no return`
+                      )}
+                      {pwRefreshEstimate.refreshTokens > 0 && (
+                        ` · ${pwRefreshEstimate.refreshTokens} return${pwRefreshEstimate.refreshTokens === 1 ? '' : 's'} to refresh`
+                      )}
+                    </span>
+                    <div className="search-top-bar-refresh-estimate-actions">
+                      <button
+                        type="button"
+                        className="btn btn-xs btn-accent"
+                        onClick={() => { setPwRefreshEstimate(null); void runRefreshReturnsSearch() }}
+                      >
+                        Confirm refresh
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-xs btn-secondary"
+                        onClick={() => setPwRefreshEstimate(null)}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="search-top-bar-refresh-actions">
+                    <button
+                      type="button"
+                      className="btn btn-xs btn-secondary"
+                      disabled={loading || pwRefreshLoading || !pwHasExistingGrid}
+                      title="Delete existing return combos for filter-matching date pairs (standalone, no re-fetch)"
+                      onClick={handleClearReturnData}
+                    >
+                      Clear return data
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-xs btn-accent"
+                      disabled={loading || pwRefreshLoading}
+                      title="Re-fetch return prices for all filtered date pairs using saved departure tokens; runs pair scan for empty cells"
+                      onClick={handleRefreshEstimate}
+                    >
+                      {pwRefreshLoading ? 'Refreshing…' : 'Refresh filtered returns'}
+                    </button>
+                    {pwAirlineFilterNarrowed && (
+                      <div className="search-top-bar-airline-scan">
+                        <label
+                          className="check airline-scan-return-only"
+                          title="Skip the outbound scan and re-fetch returns using departure tokens already saved for the selected airlines"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={pwAirlineScanReturnOnly}
+                            onChange={(e) => { setPwAirlineScanReturnOnly(e.target.checked) }}
+                            disabled={pwAirlineScanLoading || loading || pwRefreshLoading}
+                          />
+                          <span className="tiny">Return only (existing outbound tokens)</span>
+                        </label>
+                        <button
+                          type="button"
+                          className="btn btn-xs btn-primary"
+                          disabled={
+                            pwAirlineScanLoading ||
+                            loading ||
+                            pwRefreshLoading
+                          }
+                          title={
+                            pwAirlineScanReturnOnly
+                              ? `Re-fetch returns for ${pwIncludedAirlineCodes.join(', ')} using saved outbound departure tokens (filter-passing, price order)`
+                              : `Fresh outbound scan for ${pwIncludedAirlineCodes.join(', ')}, then fetch returns for filter-passing outbounds in price order`
+                          }
+                          onClick={() => { void runAirlineTargetedScanCallback() }}
+                        >
+                          {pwAirlineScanLoading ? 'Refreshing…' : 'Refresh filtered airlines'}
+                        </button>
+                        <p className="search-top-bar-include-airlines-hint tiny muted">
+                          SerpApi <span className="mono">include_airlines</span> on every call:{' '}
+                          <span className="mono">{pwIncludedAirlineCodes.join(', ') || '—'}</span>
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                )}
+                {pwAirlineScanLoading && searchProgress?.includeAirlines?.length ? (
+                  <p className="search-top-bar-include-airlines-live" role="status" aria-live="polite">
+                    <span className="search-top-bar-include-airlines-label">include_airlines (every SerpApi call):</span>{' '}
+                    <span className="mono">{searchProgress.includeAirlines.join(', ')}</span>
+                  </p>
+                ) : null}
+                {pwSerpRunActive && searchProgress && (
+                  <div className="search-top-bar-refresh-progress-row">
+                    <p className="search-top-bar-refresh-progress" role="status" aria-live="polite">
+                      {formatSearchProgress(searchProgress)}
+                      {pwReturnFetchTokenNote && (
+                        <span className="search-top-bar-refresh-route"> · {pwReturnFetchTokenNote}</span>
+                      )}
+                    </p>
+                    <button
+                      type="button"
+                      className="btn btn-xs btn-danger"
+                      onClick={handleStopSerpSearch}
+                      title="Stop after the current API call — partial results are kept"
+                    >
+                      Stop
+                    </button>
+                  </div>
+                )}
+                {pwSerpRunActive && pwActivityMessage && (
+                  <p className="search-top-bar-refresh-activity" role="status" aria-live="polite">
+                    {pwActivityMessage}
+                  </p>
+                )}
+                {pwGridVisibilityStats && (
+                  <div className="search-top-bar-refresh-stats">
+                    <div className="search-top-bar-refresh-row">
+                      <span className="refresh-stat-label">Total found:</span>
+                      <span>{pwGridVisibilityStats.outboundPassing} outbound</span>
+                      <span>
+                        · {pwGridVisibilityStats.rawReturnItineraries} return itinerar{pwGridVisibilityStats.rawReturnItineraries === 1 ? 'y' : 'ies'}
+                      </span>
+                    </div>
+                    <div className="search-top-bar-refresh-row">
+                      <span className="refresh-stat-label">Pass filter:</span>
+                      <span>
+                        {pwGridVisibilityStats.filteredReturnItineraries} return itinerar{pwGridVisibilityStats.filteredReturnItineraries === 1 ? 'y' : 'ies'}
+                      </span>
+                      <span>
+                        · {pwGridVisibilityStats.filteredRoundTrips} round-trip{pwGridVisibilityStats.filteredRoundTrips === 1 ? '' : 's'}
+                      </span>
+                    </div>
+                  </div>
+                )}
+                {pwRefreshStats && !pwRefreshLoading && (
+                  <div className="search-top-bar-refresh-stats">
+                    <div className="search-top-bar-refresh-row">
+                      <span className="refresh-stat-label">All pairs:</span>
+                      <span>+{pwRefreshStats.newReturnCombos} return</span>
+                      {pwRefreshStats.newOutboundItineraries > 0 && (
+                        <span>· +{pwRefreshStats.newOutboundItineraries} outbound</span>
+                      )}
+                    </div>
+                    <div className="search-top-bar-refresh-row">
+                      <span className="refresh-stat-label">Filtered:</span>
+                      <span>+{pwRefreshStats.filteredNewReturn} return</span>
+                      {pwRefreshStats.filteredNewOutbound > 0 && (
+                        <span>· +{pwRefreshStats.filteredNewOutbound} outbound</span>
+                      )}
+                      {(pwRefreshStats.filteredPriceUp + pwRefreshStats.filteredPriceSame + pwRefreshStats.filteredPriceDown) > 0 && (
+                        <span className="refresh-stat-prices">
+                          · ↑{pwRefreshStats.filteredPriceUp} ={pwRefreshStats.filteredPriceSame} ↓{pwRefreshStats.filteredPriceDown}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+            {pwSerpEstimate &&
+              searchGoal === 'priceWindow' &&
+              tripType === 'oneway' &&
+              searchSource === 'api' &&
+              !settings.mockMode && (
+                <span
+                  className="muted tiny search-top-bar-estimate"
+                  title={pwSerpEstimate.summary}
+                >
+                  {pwSerpEstimate.summary}
+                </span>
+              )}
+            {cacheHint && cacheHint !== 'Loaded your default search form.' && (
+              <span className="muted tiny search-top-bar-hint search-status-hint" title={cacheHint}>
+                {cacheHint}
+              </span>
+            )}
+            {error && <span className="error-inline search-error-multiline">{error}</span>}
+              </div>{/* end dx-sec run */}
 
-          {/* ── Config presets (filters + dates unified) ── */}
-          <ConfigPresetsBar
+              {/* ── Config presets ── */}
+              <div className="dx-sec">
+                <div className="dx-sec-t">Config presets</div>
+                <ConfigPresetsBar
             presets={configPresets.presets}
+            selectedPresetId={configPresetId}
+            onSelectedPresetIdChange={setConfigPresetId}
             currentConfig={currentConfigSnapshot}
             onApply={applyConfigPreset}
             onSave={configPresets.savePreset}
@@ -2180,11 +4554,13 @@ export default function App() {
             onDelete={configPresets.deletePreset}
             onSetDefault={configPresets.setDefault}
             onClearDefault={configPresets.clearDefault}
-          />
+                />
+              </div>{/* end dx-sec config */}
 
-          <details className="search-section" open>
-            <summary className="search-section-summary">Route and dates</summary>
-            <div className="search-section-body">
+              {/* ── Route and dates ── */}
+              <div className="dx-sec">
+                <div className="dx-sec-t">Route and dates</div>
+                <div className="dx-sec-body">
               <div className="field-tight">
                 <AirportMultiSelect
                   label="Origins"
@@ -2236,6 +4612,45 @@ export default function App() {
                   <input className="input" type="date" value={outboundEnd} onChange={(e) => setOutboundEnd(e.target.value)} />
                 </label>
               </div>
+              <div className="grid-2 tight-gap">
+                <label className="field-tight">
+                  <span className="label">Adults</span>
+                  <input
+                    className="input"
+                    type="number"
+                    min={1}
+                    max={9}
+                    step={1}
+                    value={adultCount}
+                    onChange={(e) => setAdultCount(Number(e.target.value))}
+                  />
+                </label>
+                <label className="field-tight">
+                  <span className="label">Children</span>
+                  <input
+                    className="input"
+                    type="number"
+                    min={0}
+                    max={9}
+                    step={1}
+                    value={childrenCount}
+                    onChange={(e) => setChildrenCount(Number(e.target.value))}
+                  />
+                </label>
+              </div>
+              <label className="field-tight">
+                <span className="label">Cabin class</span>
+                <select
+                  className="input"
+                  value={cabinClass}
+                  onChange={(e) => setCabinClass(Number(e.target.value))}
+                >
+                  <option value={1}>Economy</option>
+                  <option value={2}>Premium Economy</option>
+                  <option value={3}>Business</option>
+                  <option value={4}>First</option>
+                </select>
+              </label>
               {tripType === 'round' && (
                 <div className="grid-2 tight-gap">
                   <label className="field-tight">
@@ -2249,6 +4664,26 @@ export default function App() {
                 </div>
               )}
 
+              {searchGoal === 'priceWindow' && tripType === 'round' && (
+                <details className="pw-pair-filters-section">
+                  <summary className="pw-pair-filters-summary">
+                    <span className="pw-pair-filters-summary-chevron">▶</span>
+                    Date pair filters
+                    {pwPairFilterStatsLine ? (
+                      <span className="pw-pair-filters-summary-note"> · {pwPairFilterStatsLine}</span>
+                    ) : null}
+                  </summary>
+                  <PriceWindowPairFiltersFields
+                    filters={pwPairFilters}
+                    onChange={(next) => {
+                      setPwPairFilters(next)
+                      savePriceWindowPairFilters(next)
+                    }}
+                    statsLine={pwPairFilterStatsLine}
+                  />
+                </details>
+              )}
+
               {tripType === 'round' && (
                 <label className="check check-inline field-tight">
                   <input
@@ -2259,38 +4694,42 @@ export default function App() {
                   Different filters for return
                 </label>
               )}
-            </div>
-          </details>
+                </div>
+              </div>{/* end dx-sec route */}
 
-          <div className="reset-all-filters-row">
-            <button type="button" className="btn btn-ghost btn-small" onClick={resetAllFilters}>
-              Reset all filters
-            </button>
-          </div>
+              {/* ── Active filter summary + reset ── */}
+              <div className="dx-sec" style={{ paddingBottom: 4 }}>
+                <button type="button" className="btn btn-ghost btn-small" onClick={resetAllFilters}>Reset all filters</button>
+                {activeFilterSummaryLine ? (
+                  <div className="dx-filter-summary">{activeFilterSummaryLine}</div>
+                ) : null}
+              </div>
 
-          <details className="search-section" open>
-            <SearchSectionSummary
-              onReset={() => {
-                setOutStopsMin('')
-                setOutStopsMax('')
-                setRetStopsMin('')
-                setRetStopsMax('')
-                setOutHours({ ...EMPTY_HOURS })
-                setRetHours({ ...EMPTY_HOURS })
-                setOutLegDurationMatch('all')
-                setRetLegDurationMatch('all')
-              }}
-              resetLabel="Reset stops and durations"
-            >
-              Stops and durations
-            </SearchSectionSummary>
-            <div className="search-section-body">
+              {/* ── Stops and durations ── */}
+              <div
+                key={`cfg-filters-stops-${configPresetId}-${configPresetRevision}`}
+                className="dx-sec"
+              >
+                <div className="dx-sec-t">
+                  Stops and durations
+                  <button type="button" className="dx-sec-reset" onClick={() => {
+                    setOutStopsMin('')
+                    setOutStopsMax('')
+                    setRetStopsMin('')
+                    setRetStopsMax('')
+                    setOutHours({ ...EMPTY_HOURS })
+                    setRetHours({ ...EMPTY_HOURS })
+                    setOutLegDurationMatch('any')
+                    setRetLegDurationMatch('any')
+                  }}>Reset</button>
+                </div>
+                <div className="dx-sec-body">
               {returnCustomFilters && tripType === 'round' ? (
                 <div className="filter-dual-wrap">
                   <div className="filter-dual-col">
                     <div className="filter-col-head">Outbound</div>
                     <StopsFilterBlock
-                      distributionSource={rawOut}
+                      distributionSource={filterPoolOut}
                       stopsMin={outStopsMin}
                       stopsMax={outStopsMax}
                       onStopsMin={setOutStopsMin}
@@ -2299,7 +4738,7 @@ export default function App() {
                     <div className="duration-hist-block">
                       <DurationHistogramFilters
                         noOuterBlock
-                        distributionSource={rawOut}
+                        distributionSource={filterPoolOut}
                         hours={outHours}
                         onHour={(key, v) => setHour('out', key, v)}
                         legDurationMatch={outLegDurationMatch}
@@ -2321,7 +4760,7 @@ export default function App() {
                   <div className="filter-dual-col">
                     <div className="filter-col-head">Return</div>
                     <StopsFilterBlock
-                      distributionSource={rawReturn}
+                      distributionSource={filterPoolRet}
                       stopsMin={retStopsMin}
                       stopsMax={retStopsMax}
                       onStopsMin={setRetStopsMin}
@@ -2330,7 +4769,7 @@ export default function App() {
                     <div className="duration-hist-block">
                       <DurationHistogramFilters
                         noOuterBlock
-                        distributionSource={rawReturn}
+                        distributionSource={filterPoolRet}
                         hours={retHours}
                         onHour={(key, v) => setHour('ret', key, v)}
                         legDurationMatch={retLegDurationMatch}
@@ -2354,7 +4793,7 @@ export default function App() {
                 <div className="filter-section">
                   <div className="filter-section-title">Outbound</div>
                   <StopsFilterBlock
-                    distributionSource={rawOut}
+                    distributionSource={filterPoolOut}
                     stopsMin={outStopsMin}
                     stopsMax={outStopsMax}
                     onStopsMin={setOutStopsMin}
@@ -2363,7 +4802,7 @@ export default function App() {
                   <div className="duration-hist-block">
                     <DurationHistogramFilters
                       noOuterBlock
-                      distributionSource={rawOut}
+                      distributionSource={filterPoolOut}
                       hours={outHours}
                       onHour={(key, v) => setHour('out', key, v)}
                       legDurationMatch={outLegDurationMatch}
@@ -2383,27 +4822,29 @@ export default function App() {
                   </div>
                 </div>
               )}
-            </div>
-          </details>
+                </div>
+              </div>{/* end dx-sec stops */}
 
-          <details className="search-section" open>
-            <SearchSectionSummary
-              onReset={() => {
-                setOutPrice({ ...EMPTY_PRICE })
-                setRetPrice({ ...EMPTY_PRICE })
-              }}
-              resetLabel="Reset price filters"
-            >
-              Price
-            </SearchSectionSummary>
-            <div className="search-section-body">
+              {/* ── Price ── */}
+              <div
+                key={`cfg-filters-price-${configPresetId}-${configPresetRevision}`}
+                className="dx-sec"
+              >
+                <div className="dx-sec-t">
+                  Price
+                  <button type="button" className="dx-sec-reset" onClick={() => {
+                    setOutPrice({ ...EMPTY_PRICE })
+                    setRetPrice({ ...EMPTY_PRICE })
+                  }}>Reset</button>
+                </div>
+                <div className="dx-sec-body">
               {returnCustomFilters && tripType === 'round' ? (
                 <div className="filter-dual-wrap">
                   <div className="filter-dual-col">
                     <div className="filter-col-head">Outbound</div>
                     <div className="duration-hist-block">
                       <PriceHistogramFilter
-                        distributionSource={rawOut}
+                        distributionSource={filterPoolOut}
                         minStr={outPrice.min}
                         maxStr={outPrice.max}
                         onMin={(v) => setOutPrice((p) => ({ ...p, min: v }))}
@@ -2416,7 +4857,7 @@ export default function App() {
                     <div className="filter-col-head">Return</div>
                     <div className="duration-hist-block">
                       <PriceHistogramFilter
-                        distributionSource={rawReturn}
+                        distributionSource={filterPoolRet}
                         minStr={retPrice.min}
                         maxStr={retPrice.max}
                         onMin={(v) => setRetPrice((p) => ({ ...p, min: v }))}
@@ -2431,7 +4872,7 @@ export default function App() {
                   <div className="filter-section-title">Outbound</div>
                   <div className="duration-hist-block">
                     <PriceHistogramFilter
-                      distributionSource={rawOut}
+                      distributionSource={filterPoolOut}
                       minStr={outPrice.min}
                       maxStr={outPrice.max}
                       onMin={(v) => setOutPrice((p) => ({ ...p, min: v }))}
@@ -2441,23 +4882,25 @@ export default function App() {
                   </div>
                 </div>
               )}
-            </div>
-          </details>
+                </div>
+              </div>{/* end dx-sec price */}
 
-          <details className="search-section" open>
-            <SearchSectionSummary
-              onReset={() => {
-                setTimeBucketsOut(new Set())
-                setTimeBucketsRet(new Set())
-                setOutTimeRange({ ...EMPTY_TIME_RANGE })
-                setRetTimeRange({ ...EMPTY_TIME_RANGE })
-                setDisplayTimezone('')
-              }}
-              resetLabel="Reset time and timezone filters"
-            >
-              Time and timezone
-            </SearchSectionSummary>
-            <div className="search-section-body">
+              {/* ── Time and timezone ── */}
+              <div
+                key={`cfg-filters-time-${configPresetId}-${configPresetRevision}`}
+                className="dx-sec"
+              >
+                <div className="dx-sec-t">
+                  Time and timezone
+                  <button type="button" className="dx-sec-reset" onClick={() => {
+                    setTimeBucketsOut(new Set())
+                    setTimeBucketsRet(new Set())
+                    setOutTimeRange({ ...EMPTY_TIME_RANGE })
+                    setRetTimeRange({ ...EMPTY_TIME_RANGE })
+                    setDisplayTimezone('')
+                  }}>Reset</button>
+                </div>
+                <div className="dx-sec-body">
               {returnCustomFilters && tripType === 'round' ? (
                 <div className="filter-dual-wrap">
                   <div className="filter-dual-col">
@@ -2470,7 +4913,7 @@ export default function App() {
                     </div>
                     <div className="duration-hist-block">
                       <TakeoffLandingHistogramFilters
-                        distributionSource={rawOut}
+                        distributionSource={filterPoolOut}
                         tzByIata={tzByIata}
                         takeoffMin={outTimeRange.takeoffMin}
                         takeoffMax={outTimeRange.takeoffMax}
@@ -2493,7 +4936,7 @@ export default function App() {
                     </div>
                     <div className="duration-hist-block">
                       <TakeoffLandingHistogramFilters
-                        distributionSource={rawReturn}
+                        distributionSource={filterPoolRet}
                         tzByIata={tzByIata}
                         takeoffMin={retTimeRange.takeoffMin}
                         takeoffMax={retTimeRange.takeoffMax}
@@ -2526,7 +4969,7 @@ export default function App() {
                   </div>
                   <div className="duration-hist-block">
                     <TakeoffLandingHistogramFilters
-                      distributionSource={rawOut}
+                      distributionSource={filterPoolOut}
                       tzByIata={tzByIata}
                       takeoffMin={outTimeRange.takeoffMin}
                       takeoffMax={outTimeRange.takeoffMax}
@@ -2555,31 +4998,30 @@ export default function App() {
                   ))}
                 </select>
               </label>
-            </div>
-          </details>
+                </div>
+              </div>{/* end dx-sec time */}
 
-          <details className="search-section" open>
-            <SearchSectionSummary
-              onReset={() => {
-                setAirlineExcludedCodes(new Set())
-                setAircraftSelectedCodes([])
-                setAircraftMatchMode('any')
-                setLayoverGeoFilterActive(false)
-                setLayoverRegionOn(() => {
-                  const o = {} as Record<RegionId, boolean>
-                  for (const k of REGION_IDS_IN_UI_ORDER) o[k] = true
-                  return o
-                })
-                setLayoverAirportOff(new Set())
-                setExcludeTechnical(false)
-                setShowOpenJaw(true)
-                setUniqueRoutesOnly(true)
-              }}
-              resetLabel="Reset airlines, aircraft, and layover filters"
-            >
-              Airlines and regions
-            </SearchSectionSummary>
-            <div className="search-section-body">
+              {/* ── Airlines and regions ── */}
+              <div className="dx-sec">
+                <div className="dx-sec-t">
+                  Airlines and regions
+                  <button type="button" className="dx-sec-reset" onClick={() => {
+                    setAirlineExcludedCodes(new Set())
+                    setAircraftSelectedCodes([])
+                    setAircraftMatchMode('any')
+                    setLayoverGeoFilterActive(false)
+                    setLayoverRegionOn(() => {
+                      const o = {} as Record<RegionId, boolean>
+                      for (const k of REGION_IDS_IN_UI_ORDER) o[k] = true
+                      return o
+                    })
+                    setLayoverAirportOff(new Set())
+                    setExcludeTechnical(false)
+                    setShowOpenJaw(true)
+                    setUniqueRoutesOnly(true)
+                  }}>Reset</button>
+                </div>
+                <div className="dx-sec-body">
           <AirlineFilterPanel
             hasSearched={hasSearched}
             airlinesInResults={airlinesFromResults}
@@ -2631,7 +5073,7 @@ export default function App() {
 
           <LayoverRegionsPanel
             hasSearched={hasSearched}
-            rawItineraries={rawOut}
+            rawItineraries={filterPoolOut}
             airportsByIata={airportsByIata}
             regionCountries={regionCountriesForLayover}
             airportUiRegions={airportUiRegions}
@@ -2654,64 +5096,110 @@ export default function App() {
                 Show open-jaw
               </label>
             ) : null}
-            <label className="check check-inline field-tight">
-              <input
-                type="checkbox"
-                checked={uniqueRoutesOnly}
-                onChange={(e) => setUniqueRoutesOnly(e.target.checked)}
-              />
-              One row per airport route
-            </label>
-          </div>
+            <div className="field-tight dx-dedup-row">
+              <span className="label">Dedup</span>
+              <div className="dx-dedup-btns" role="group" aria-label="Deduplication mode">
+                {([
+                  ['off',      'All'],
+                  ['route',    'Per route'],
+                  ['schedule', 'Per schedule'],
+                ] as [DedupeMode, string][]).map(([mode, label]) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    className={`dx-dedup-btn${dedupeMode === mode ? ' on' : ''}`}
+                    onClick={() => setDedupeMode(mode)}
+                    title={
+                      mode === 'off'      ? 'Show all itineraries (one row per date/variant)' :
+                      mode === 'route'    ? 'One row per route — keeps cheapest fare' :
+                      'One row per route + layover combo — shows different connection lengths separately'
+                    }
+                  >{label}</button>
+                ))}
+              </div>
             </div>
-          </details>
+                </div>
+                </div>
+              </div>{/* end dx-sec airlines */}
 
-          {(serpCapture.outbound || serpCapture.return) && (
-            <div className="row2 serp-capture-actions">
-              <button
-                type="button"
-                className="btn btn-secondary btn-tiny"
-                onClick={() => {
-                  const payload = buildSerpDownloadPayload({
-                    outbound: serpCapture.outbound,
-                    return: serpCapture.return,
-                  })
-                  const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')
-                  downloadJson(`serpapi-capture-${stamp}.json`, payload)
-                }}
-              >
-                Download SerpApi capture
-              </button>
+              {(serpCapture.outbound || serpCapture.return) && (
+                <div className="dx-sec">
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-tiny"
+                    onClick={() => {
+                      const payload = buildSerpDownloadPayload({
+                        outbound: serpCapture.outbound,
+                        return: serpCapture.return,
+                      })
+                      const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')
+                      downloadJson(`serpapi-capture-${stamp}.json`, payload)
+                    }}
+                  >
+                    Download SerpApi capture
+                  </button>
+                </div>
+              )}
+
+              </div>{/* end dx-rail-scroll */}
+              {/* ── Save actions ── */}
+              <div className="dx-rail-foot">
+                <button type="button" className="btn btn-secondary btn-tiny" onClick={handleSaveSearch}>Save search</button>
+                <button type="button" className="btn btn-ghost btn-tiny" onClick={handleSaveAsDefault}>Save as default</button>
+              </div>
             </div>
+          ) : (
+            <button type="button" className="dx-rail-show" onClick={() => setSearchPanelOpen(true)} title="Show search panel">☰</button>
           )}
-        </section>
-          <div className="search-panel-save-actions">
-            <button type="button" className="btn btn-secondary btn-tiny" onClick={handleSaveSearch}>
-              Save search
-            </button>
-            <button type="button" className="btn btn-ghost btn-tiny" onClick={handleSaveAsDefault}>
-              Save as default
-            </button>
-          </div>
-          </div>
-
+          {/* CENTER */}
+          <div className="dx-center">
         <ErrorBoundary inline label="Results render error">
         <div className="results-stack">
-          {searchGoal === 'priceWindow' && (pwOutResultFiltered || pwRetResultFiltered) ? (
+          {searchGoal === 'priceWindow' &&
+          (pwOutResultFiltered || pwRetResultFiltered || loading || pwEmptyGridHint) ? (
+            hidePwResultsUi ? (
+              <p className="muted pw-search-busy-hint">
+                {loading
+                  ? 'Price window search in progress — grids hidden so the page stays responsive. Progress shows in the search bar.'
+                  : pwFiltersPending
+                    ? 'Applying filters to the price window…'
+                    : 'Confirm search to continue.'}
+              </p>
+            ) : loading && !(pwOutResultFiltered || pwRetResultFiltered) ? (
+              <p className="muted pw-search-busy-hint">
+                Loading price window from browser database… {searchProgress?.datePair ?? ''}
+              </p>
+            ) : pwEmptyGridHint && !(pwOutResultFiltered?.routeKeyOrder?.length) ? (
+              <div className="pw-filter-empty-banner" role="alert">
+                <p>{pwEmptyGridHint}</p>
+                <button type="button" className="btn btn-secondary btn-small" onClick={resetAllFilters}>
+                  Reset all filters
+                </button>
+              </div>
+            ) : (
             <div className="pw-panels-stack">
+              <HeatmapQualityFilterBar
+                activeFilter={heatmapQualityFilter}
+                onToggle={toggleHeatmapQualityFilter}
+                onClear={() => setHeatmapQualityFilter(new Set())}
+                qualityTotals={heatmapQualityTotals}
+              />
               {/* Total round-trip panel — shows combined prices; clicking drives the Outbound+Return panels */}
               {tripType === 'round' && pwOutResultFiltered && pwRetResultFiltered && (
                 <PriceWindowPanel
                   result={pwOutResultFiltered}
                   currency={settings.currency}
                   title="Total round-trip by date"
+                  summaryTitle="Selected itinerary"
+                  panelTestId="pw-panel-total"
                   namesByIata={namesByIata}
                   returnResult={pwRetResultFiltered}
+                  roundTripPairMeta={pwPairMetaMapFiltered}
                   onRouteSelect={handleOutboundSelect}
                   controlledSelection={pwOutboundSel}
                   selectionOnly={true}
                   selectedReturnIt={pwReturnSelResolved?.it ?? null}
-                  selectedReturnDate={pwReturnSelResolved?.date}
+                  selectedReturnDate={pwReturnSel?.date ?? pwReturnSelResolved?.date}
                   maxPrice={filterOut.maxPrice}
                   onSave={savePriceWindowSelection}
                   tzByIata={tzByIata}
@@ -2723,6 +5211,53 @@ export default function App() {
                   verifications={priceVerifications}
                   onUpsertVerification={(row) => void upsertVerification(row)}
                   onRemoveVerification={(rk, od, rd) => void removeVerification(rk, od, rd)}
+                  adults={paxCounts.adults}
+                  children={paxCounts.children}
+                  cabinClass={cabinClass}
+                  roundTripCombos={pwRoundTripFiltered}
+                  roundTripDeepenStates={pwRoundTripDeepenStates}
+                  rtTokenIndex={pwRtTokenIndex}
+                  deepenByOutDate={pwDeepenByOutDate}
+                  outboundLegFilter={(it) => passesItineraryFilters(it, filterOut)}
+                  returnLegFilter={(it) => passesItineraryFilters(it, filterRet)}
+                  dateBounds={pwDateBounds}
+                  qualityFilter={heatmapQualityFilter}
+                  routeStopsMin={filterOut.minStops}
+                  routeStopsMax={filterOut.maxStops}
+                />
+              )}
+              {/* Selected itinerary summary — one-way only (round-trip uses pw-panel-total above) */}
+              {tripType === 'oneway' && pwOutResultFiltered && (
+                <PriceWindowPanel
+                  result={pwOutResultFiltered}
+                  currency={settings.currency}
+                  title="Selected itinerary"
+                  summaryTitle="Selected itinerary"
+                  panelTestId="pw-panel-oneway-summary"
+                  namesByIata={namesByIata}
+                  onRouteSelect={handleOutboundSelect}
+                  controlledSelection={pwOutboundSel}
+                  selectionOnly={true}
+                  hideReturn={true}
+                  maxPrice={filterOut.maxPrice}
+                  onSave={savePriceWindowSelection}
+                  tzByIata={tzByIata}
+                  displayTimezone={displayTimezone}
+                  airlineDirectory={airlinesDict}
+                  airlinesMeta={airlinesMetaJson as AirlinesMeta}
+                  layoverLongMinHours={settings.layoverLongMinHours}
+                  layoverShortMaxHours={settings.layoverShortMaxHours}
+                  verifications={priceVerifications}
+                  onUpsertVerification={(row) => void upsertVerification(row)}
+                  onRemoveVerification={(rk, od, rd) => void removeVerification(rk, od, rd)}
+                  adults={paxCounts.adults}
+                  children={paxCounts.children}
+                  cabinClass={cabinClass}
+                  outboundLegFilter={(it) => passesItineraryFilters(it, filterOut)}
+                  dateBounds={pwDateBounds}
+                  qualityFilter={heatmapQualityFilter}
+                  routeStopsMin={filterOut.minStops}
+                  routeStopsMax={filterOut.maxStops}
                 />
               )}
               {/* Outbound panel — shows itinerary picker for the currently selected outbound cell */}
@@ -2731,14 +5266,31 @@ export default function App() {
                   result={pwOutResultFiltered}
                   currency={settings.currency}
                   title="Outbound by date"
+                  panelTestId="pw-panel-outbound"
+                  roundTripCombos={pwRoundTripFiltered}
+                  roundTripPairMeta={pwPairMetaMapFiltered}
+                  roundTripDeepenStates={pwRoundTripDeepenStates}
+                  rtTokenIndex={pwRtTokenIndex}
+                  deepenByOutDate={pwDeepenByOutDate}
                   namesByIata={namesByIata}
-                  returnResult={null}
+                  returnResult={pwRetResultFiltered}
                   onRouteSelect={handleOutboundSelect}
                   controlledSelection={pwOutboundSel}
                   selectedReturnIt={pwReturnSelResolved?.it ?? null}
-                  selectedReturnDate={pwReturnSelResolved?.date}
+                  selectedReturnDate={pwReturnSel?.date ?? pwReturnSelResolved?.date}
                   maxPrice={filterOut.maxPrice}
                   onSave={savePriceWindowSelection}
+                  airlineDirectory={airlinesDict}
+                  airlinesMeta={airlinesMetaJson as AirlinesMeta}
+                  adults={paxCounts.adults}
+                  children={paxCounts.children}
+                  cabinClass={cabinClass}
+                  outboundLegFilter={(it) => passesItineraryFilters(it, filterOut)}
+                  returnLegFilter={(it) => passesItineraryFilters(it, filterRet)}
+                  dateBounds={pwDateBounds}
+                  qualityFilter={heatmapQualityFilter}
+                  routeStopsMin={filterOut.minStops}
+                  routeStopsMax={filterOut.maxStops}
                 />
               )}
               {/* Return panel — shows return prices filtered by selected outbound route */}
@@ -2747,11 +5299,31 @@ export default function App() {
                   result={pwRetResultFiltered}
                   currency={settings.currency}
                   title="Return by date"
+                  panelTestId="pw-panel-return"
+                  roundTripCombos={pwRoundTripFiltered}
+                  roundTripPairMeta={pwPairMetaMapFiltered}
+                  roundTripDeepenStates={pwRoundTripDeepenStates}
+                  rtTokenIndex={pwRtTokenIndex}
+                  deepenByOutDate={pwDeepenByOutDate}
+                  pairedOutboundResult={pwOutResultFiltered}
+                  pairedOutboundRouteKey={pwOutboundSel?.routeKey ?? null}
+                  pairedOutboundDate={pwOutboundSel?.date ?? null}
+                  pairedOutboundSelection={pwOutboundSel}
                   namesByIata={namesByIata}
-                  filterToRouteKey={pwOutboundSel ? reverseRouteKey(pwOutboundSel.routeKey) : null}
                   onRouteSelect={setPwReturnSel}
                   controlledSelection={pwReturnSel}
                   maxPrice={filterRet.maxPrice}
+                  airlineDirectory={airlinesDict}
+                  airlinesMeta={airlinesMetaJson as AirlinesMeta}
+                  adults={paxCounts.adults}
+                  children={paxCounts.children}
+                  cabinClass={cabinClass}
+                  outboundLegFilter={(it) => passesItineraryFilters(it, filterOut)}
+                  returnLegFilter={(it) => passesItineraryFilters(it, filterRet)}
+                  dateBounds={pwDateBounds}
+                  qualityFilter={heatmapQualityFilter}
+                  routeStopsMin={filterRet.minStops}
+                  routeStopsMax={filterRet.maxStops}
                 />
               )}
               {/* Date heatmap — outbound × return date matrix for a selected route */}
@@ -2759,15 +5331,28 @@ export default function App() {
                 <DateHeatmapPanel
                   outResult={pwOutResultFiltered}
                   retResult={pwRetResultFiltered}
+                  roundTripCombos={pwRoundTripFiltered}
+                  roundTripPairMeta={pwPairMetaMapFiltered}
+                  roundTripDeepenStates={pwRoundTripDeepenStates}
+                  rtTokenIndex={pwRtTokenIndex}
                   currency={settings.currency}
                   namesByIata={namesByIata}
+                  airlineDirectory={airlinesDict}
+                  airlinesMeta={airlinesMetaJson as AirlinesMeta}
+                  paxDesc={paxDesc}
                   verifications={priceVerifications}
                   onUpsertVerification={(row) => void upsertVerification(row)}
                   onRemoveVerification={(rk, od, rd) => void removeVerification(rk, od, rd)}
                   onImportVerifications={importVerifications}
+                  preferredRouteKey={pwOutboundSel?.routeKey ?? null}
+                  dateBounds={pwDateBounds}
+                  qualityFilter={heatmapQualityFilter}
+                  outboundLegFilter={(it) => passesItineraryFilters(it, filterOut)}
+                  returnLegFilter={(it) => passesItineraryFilters(it, filterRet)}
                 />
               )}
             </div>
+            )
           ) : searchGoal === 'discovery' && showRouteMap ? (
             <ResultsRouteMap
               items={routeMapItems}
@@ -2787,7 +5372,8 @@ export default function App() {
           ) : null}
           {searchGoal === 'discovery' && (
             <>
-              <ResultsList
+              <ResultsViewSwitcher
+                persistKey="out"
                 title="Outbound"
                 items={displayOut}
                 sort={sortOut}
@@ -2814,9 +5400,11 @@ export default function App() {
                 }}
                 resultLeg="outbound"
                 mapFocus={{ active: mapSoloFocus, onSet: setMapSoloFocus }}
+                cabinClass={cabinClass}
               />
               {tripType === 'round' && (
-                <ResultsList
+                <ResultsViewSwitcher
+                  persistKey="ret"
                   title="Return"
                   items={displayReturn}
                   sort={sortReturn}
@@ -2843,6 +5431,7 @@ export default function App() {
                   }}
                   resultLeg="return"
                   mapFocus={{ active: mapSoloFocus, onSet: setMapSoloFocus }}
+                  cabinClass={cabinClass}
                 />
               )}
             </>
@@ -2850,9 +5439,10 @@ export default function App() {
 
         </div>
         </ErrorBoundary>
+          </div>
         </div>
-          </>
-        ) : mainTab === 'savedSearches' ? (
+      ) : mainTab === 'savedSearches' ? (
+        <div className="dx-body dx-saved-page">
           <SavedSearchesPanel
             rows={savedSearches}
             onApply={(row) => {
@@ -2864,7 +5454,9 @@ export default function App() {
             onDelete={(id) => void removeSavedSearch(id)}
             onOpenSearchTab={() => setMainTab('search')}
           />
-        ) : (
+        </div>
+      ) : (
+        <div className="dx-body dx-saved-page">
           <div className="saved-results-page">
             <SavedRoundTripsList
               items={savedRoundTrips}
@@ -2905,6 +5497,7 @@ export default function App() {
                 onRemove: (sk) => void removeSavedResult('outbound', sk),
               }}
               resultLeg="outbound"
+              cabinClass={cabinClass}
             />
             <ResultsList
               title="Saved return"
@@ -2933,10 +5526,33 @@ export default function App() {
                 onRemove: (sk) => void removeSavedResult('return', sk),
               }}
               resultLeg="return"
+              cabinClass={cabinClass}
             />
           </div>
-        )}
-      </main>
+        </div>
+      )}
+
+      <PriceWindowSearchConfirmModal
+        open={pwSearchConfirmOpen}
+        tripType={tripType}
+        outboundDate={outboundDate}
+        outboundEnd={outboundEnd}
+        returnDate={returnDate}
+        returnEnd={returnEnd}
+        sortMode={pwRtSortMode}
+        pairFilters={pwPairFilters}
+        hasExistingGrid={pwHasExistingGrid}
+        replaceOutbound={pwReplaceOutbound}
+        plannedHourlySerpCalls={settings.pwHourlySerpCalls}
+        hourUsed={serpUsageState.status === 'ok' ? serpUsageState.data.this_hour_searches : undefined}
+        hourLimit={
+          serpUsageState.status === 'ok'
+            ? serpUsageState.data.account_rate_limit_per_hour
+            : SERP_HOURLY_LIMIT_DEFAULT
+        }
+        onProceed={handlePwSearchProceed}
+        onCancel={() => setPwSearchConfirmOpen(false)}
+      />
 
       <SettingsModal
         open={settingsOpen}
@@ -2953,6 +5569,7 @@ export default function App() {
         cacheTtlHours={cacheTtlHours}
         onCacheTtlChange={(h) => void updateCacheTtl(h)}
         onDownloadDb={() => void downloadDb()}
+        onRestoreDb={(file) => void restoreDbFromFile(file)}
         onResetSqlite={() => void resetEntireDb()}
         getSerpCaptureRows={getSerpCaptureRows}
         getSerpCaptureStoredRecord={getSerpCaptureStoredRecord}

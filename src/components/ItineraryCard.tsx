@@ -4,8 +4,10 @@ import { buildGoogleFlightsDeepLink, buildGoogleFlightsSearchUrl, itineraryDetai
 import { totalFlightMinutes } from '../lib/filters'
 import {
   calendarDayOffsetFromTripStart,
+  formatDepartureDate,
   formatFirstDepartureHeading,
   formatSegmentTimeline,
+  formatTimesChain,
   tripStartDisplayAnchor,
 } from '../lib/formatFlightTimes'
 import { segmentAirlineLogoFromEnriched } from '../lib/airlineDisplay'
@@ -164,8 +166,12 @@ export type ItineraryCardProps = {
   /** Per-itinerary link override (used by saved results where the stored origins/dates differ). */
   gfLinkOverride?: { gfOrigins: string[]; gfDestinations: string[]; linkDate: string; returnDate: string | null }
   showOpenJaw?: boolean
+  /** Hide per-leg fare (e.g. round-trip bundle shown once above the cards). */
+  hideFare?: boolean
   /** Extra action buttons rendered at the bottom of the card (e.g. Save / Remove). */
   actions?: React.ReactNode
+  /** Cabin class for the Google Flights deep link: 1=Economy (default), 2=Premium Economy, 3=Business, 4=First */
+  travelClass?: number
 }
 
 /**
@@ -189,13 +195,21 @@ export function ItineraryCard({
   returnDate,
   gfLinkOverride,
   showOpenJaw = false,
+  hideFare = false,
   actions,
+  travelClass = 1,
 }: ItineraryCardProps) {
   const tripStart = tripStartDisplayAnchor(it.segments[0], tzByIata, displayTimezone)
   const o = gfLinkOverride ?? { gfOrigins, gfDestinations, linkDate, returnDate: returnDate ?? null }
-  const deepUrl = buildGoogleFlightsDeepLink(it, o.linkDate)
-  const { url: searchUrl, reliable } = buildGoogleFlightsSearchUrl(o.gfOrigins, o.gfDestinations, o.linkDate, o.returnDate)
-  const details = itineraryDetailsText(it, 'Itinerary', o.linkDate)
+  // Use actual first-segment departure date (not the search range start).
+  const actualDate = it.segments[0]?.depTime?.slice(0, 10) || o.linkDate
+  // Always roundTrip=true (root.2=2): GF resolves single-leg TFS to the booking page
+  // with root.2=2; root.2=1 (one-way) requires a tfu token and falls back to landing page.
+  const deepUrl = buildGoogleFlightsDeepLink(it, actualDate, null, null, 1, 0, true, travelClass)
+  const { url: searchUrl, reliable } = buildGoogleFlightsSearchUrl(
+    o.gfOrigins, o.gfDestinations, actualDate, o.returnDate
+  )
+  const details = itineraryDetailsText(it, 'Itinerary', actualDate)
   const copy = async () => { await navigator.clipboard.writeText(details) }
 
   return (
@@ -210,7 +224,7 @@ export function ItineraryCard({
             <div className="itin-hero-duration">{fmtMin(totalFlightMinutes(it))}</div>
             <div className="itin-hero-duration-caption muted small">total flight duration</div>
           </div>
-          {it.price != null ? (
+          {!hideFare && it.price != null ? (
             <div className="itin-hero-duration-block">
               <div className="itin-hero-duration itin-hero-price-figure" title="Fare from search">
                 {fmtPrice(it.price, priceCurrency)}
@@ -221,7 +235,13 @@ export function ItineraryCard({
         </div>
         <div className="itin-hero-aside">
           <div className="itin-card-head">
-            <div className="route">{it.waypointKey.replace(/-/g, ' → ')}</div>
+            <div className="route">
+              {it.waypointKey.replace(/-/g, ' → ')}
+              {(() => {
+                const d = formatDepartureDate(it.segments[0], tzByIata, displayTimezone)
+                return d ? <span className="route-date">{d}</span> : null
+              })()}
+            </div>
             {showOpenJaw ? (
               <div className="itin-card-head-badges">
                 <span className="badge badge-oj">Open jaw</span>
@@ -229,13 +249,29 @@ export function ItineraryCard({
             ) : null}
           </div>
           <p className="itin-hero-meta muted small">
-            {formatFirstDepartureHeading(it.segments[0], tzByIata, displayTimezone)}
-            {' · '}
             {it.segments.length} segment{it.segments.length !== 1 ? 's' : ''}
             {it.layovers.length > 0
               ? ` · ${it.layovers.length} layover${it.layovers.length !== 1 ? 's' : ''}`
               : ''}
           </p>
+          {(() => {
+            const chain = formatTimesChain(it, tzByIata, displayTimezone)
+            if (!chain.length) return null
+            return (
+              <div className="itin-times-chain" aria-label="Flight times">
+                {chain.map((stop, idx) => (
+                  <Fragment key={`${stop.iata}-${idx}`}>
+                    {idx > 0 && <span className="itin-times-chain-arrow" aria-hidden>→</span>}
+                    <span className="itin-times-chain-stop">
+                      <span className="itin-times-chain-iata">{stop.iata}</span>
+                      <span className="itin-times-chain-time">{stop.time}</span>
+                      {stop.dayPlus > 0 && <sup className="itin-times-chain-day">+{stop.dayPlus}</sup>}
+                    </span>
+                  </Fragment>
+                ))}
+              </div>
+            )
+          })()}
         </div>
       </div>
 

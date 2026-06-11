@@ -1,6 +1,12 @@
 import type { Database } from 'sql.js'
+import {
+  csvToAirportSet,
+  itineraryMatchesRequestedEndpoints,
+  normRouteCsv,
+} from '../lib/cacheRouteMatch'
 import type { NormalizedItinerary } from '../lib/types'
-import type { HashParts } from './searchHash'
+import { parseStoredCombo, comboToStored, type RoundTripCombo } from '../lib/roundTripTypes'
+import type { HashParts, SearchCacheParts } from './searchHash'
 import { computeSearchParamsHash } from './searchHash'
 import { DateTime } from 'luxon'
 
@@ -27,24 +33,25 @@ function lastInsertId(db: Database): number {
 
 export function storeSearchResults(
   db: Database,
-  parts: HashParts,
+  parts: SearchCacheParts,
   items: NormalizedItinerary[],
   tzByIata: Map<string, string>,
 ) {
   const hash = computeSearchParamsHash(parts)
   const mock = parts.mockMode ? 1 : 0
+  const paxDesc = parts.paxDesc || '1A'
   const origins = [...parts.origins].sort().join(',')
   const dests = [...parts.destinations].sort().join(',')
 
   db.run('BEGIN')
   try {
     db.run(
-      'DELETE FROM search_run WHERE params_hash = ? AND direction = ? AND mock_mode = ?',
-      [hash, parts.direction, mock],
+      'DELETE FROM search_run WHERE params_hash = ? AND direction = ? AND mock_mode = ? AND pax_desc = ?',
+      [hash, parts.direction, mock, paxDesc],
     )
     db.run(
-      `INSERT INTO search_run (created_at, params_hash, direction, origins, destinations, center_date, flex_days, max_segments, mock_mode)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO search_run (created_at, params_hash, direction, origins, destinations, center_date, flex_days, max_segments, mock_mode, pax_desc)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         Date.now(),
         hash,
@@ -55,6 +62,7 @@ export function storeSearchResults(
         parts.flexDays,
         parts.maxSegments,
         mock,
+        paxDesc,
       ],
     )
     const searchRunId = lastInsertId(db)
@@ -137,9 +145,12 @@ export function storeSearchResults(
  */
 export function tryLoadCachedSearchByRoute(
   db: Database,
-  parts: Pick<HashParts, 'direction' | 'origins' | 'destinations' | 'centerDate' | 'flexDays' | 'mockMode'>,
+  parts: Pick<HashParts, 'direction' | 'origins' | 'destinations' | 'centerDate' | 'flexDays' | 'mockMode'> & {
+    paxDesc?: string
+  },
 ): NormalizedItinerary[] | null {
   const mock = parts.mockMode ? 1 : 0
+  const paxDesc = parts.paxDesc ?? '1A'
   const origins = [...parts.origins].sort().join(',')
   const dests = [...parts.destinations].sort().join(',')
   const ttl = getCacheTtlMs(db)
@@ -148,10 +159,10 @@ export function tryLoadCachedSearchByRoute(
   const stmt = db.prepare(
     `SELECT id, created_at FROM search_run
      WHERE direction = ? AND origins = ? AND destinations = ?
-       AND center_date = ? AND flex_days = ? AND mock_mode = ?
+       AND center_date = ? AND flex_days = ? AND mock_mode = ? AND pax_desc = ?
      ORDER BY created_at DESC LIMIT 1`,
   )
-  stmt.bind([parts.direction, origins, dests, parts.centerDate, parts.flexDays, mock])
+  stmt.bind([parts.direction, origins, dests, parts.centerDate, parts.flexDays, mock, paxDesc])
   if (!stmt.step()) {
     stmt.free()
     return null
@@ -184,7 +195,7 @@ export function tryLoadCachedSearchByRoute(
  */
 export function tryLoadCachedSearchSplitFallback(
   db: Database,
-  parts: HashParts,
+  parts: SearchCacheParts,
 ): NormalizedItinerary[] | null {
   // 1. Exact match first
   const exact = tryLoadCachedSearch(db, parts)
@@ -234,34 +245,35 @@ export function tryLoadCachedSearchSplitFallback(
  */
 function tryLoadCachedSearchSupersetFallback(
   db: Database,
-  parts: HashParts,
+  parts: SearchCacheParts,
 ): NormalizedItinerary[] | null {
   const ttl = getCacheTtlMs(db)
   const now = Date.now()
   const mock = parts.mockMode ? 1 : 0
+  const paxDesc = parts.paxDesc || '1A'
 
-  // Load recent candidate runs matching direction/dates/segments/mock within TTL
+  // Load recent candidate runs matching direction/dates/segments/mock/pax within TTL
   const stmt = db.prepare(
     `SELECT id, origins, destinations FROM search_run
      WHERE direction = ? AND mock_mode = ? AND center_date = ?
-       AND flex_days = ? AND max_segments = ? AND created_at >= ?
+       AND flex_days = ? AND max_segments = ? AND pax_desc = ? AND created_at >= ?
      ORDER BY created_at DESC LIMIT 50`,
   )
-  stmt.bind([parts.direction, mock, parts.centerDate, parts.flexDays, parts.maxSegments, now - ttl])
+  stmt.bind([parts.direction, mock, parts.centerDate, parts.flexDays, parts.maxSegments, paxDesc, now - ttl])
   const rows: Array<{ id: number; origins: string; destinations: string }> = []
   while (stmt.step()) {
     rows.push(stmt.getAsObject() as { id: number; origins: string; destinations: string })
   }
   stmt.free()
 
-  const wantOrigins = new Set(parts.origins.map((s) => s.trim().toUpperCase()))
-  const wantDests = new Set(parts.destinations.map((s) => s.trim().toUpperCase()))
+  const wantOrigins = csvToAirportSet(normRouteCsv(parts.origins))
+  const wantDests = csvToAirportSet(normRouteCsv(parts.destinations))
 
   for (const row of rows) {
-    const cachedOrigins = new Set(row.origins.split(',').map((s) => s.trim().toUpperCase()))
-    const cachedDests = new Set(row.destinations.split(',').map((s) => s.trim().toUpperCase()))
+    const cachedOrigins = csvToAirportSet(row.origins)
+    const cachedDests = csvToAirportSet(row.destinations)
 
-    // wantOrigins ⊆ cachedOrigins AND wantDests ⊆ cachedDests (must be a strict superset)
+    // wantOrigins ⊆ cachedOrigins AND wantDests ⊆ cachedDests
     const originsOk = [...wantOrigins].every((o) => cachedOrigins.has(o))
     const destsOk = [...wantDests].every((d) => cachedDests.has(d))
     const isSuperset = cachedOrigins.size > wantOrigins.size || cachedDests.size > wantDests.size
@@ -275,12 +287,7 @@ function tryLoadCachedSearchSupersetFallback(
       const j = (q.getAsObject() as { raw_json: string }).raw_json
       try {
         const it = JSON.parse(j) as NormalizedItinerary
-        const firstDep = it.segments[0]?.dep?.toUpperCase()
-        const lastArr = it.segments[it.segments.length - 1]?.arr?.toUpperCase()
-        if (
-          (!firstDep || wantOrigins.has(firstDep)) &&
-          (!lastArr || wantDests.has(lastArr))
-        ) {
+        if (itineraryMatchesRequestedEndpoints(it, wantOrigins, wantDests, 'outbound')) {
           filtered.push(it)
         }
       } catch { /* skip */ }
@@ -293,18 +300,19 @@ function tryLoadCachedSearchSupersetFallback(
   return null
 }
 
-export function tryLoadCachedSearch(db: Database, parts: HashParts): NormalizedItinerary[] | null {
+export function tryLoadCachedSearch(db: Database, parts: SearchCacheParts): NormalizedItinerary[] | null {
   const hash = computeSearchParamsHash(parts)
   const mock = parts.mockMode ? 1 : 0
+  const paxDesc = parts.paxDesc || '1A'
   const ttl = getCacheTtlMs(db)
   const now = Date.now()
 
   const stmt = db.prepare(
     `SELECT id, created_at FROM search_run
-     WHERE params_hash = ? AND direction = ? AND mock_mode = ?
+     WHERE params_hash = ? AND direction = ? AND mock_mode = ? AND pax_desc = ?
      ORDER BY created_at DESC LIMIT 1`,
   )
-  stmt.bind([hash, parts.direction, mock])
+  stmt.bind([hash, parts.direction, mock, paxDesc])
   if (!stmt.step()) {
     stmt.free()
     return null
@@ -327,4 +335,23 @@ export function tryLoadCachedSearch(db: Database, parts: HashParts): NormalizedI
   }
   q.free()
   return out.length ? out : null
+}
+
+/** Decode round-trip bundles persisted with `comboToStored` in itinerary raw_json. */
+export function roundTripCombosFromItineraries(items: NormalizedItinerary[]): RoundTripCombo[] {
+  const combos: RoundTripCombo[] = []
+  for (const it of items) {
+    const c = parseStoredCombo(it.raw ?? it)
+    if (c) combos.push(c)
+  }
+  return combos
+}
+
+/** Store round-trip combos as itinerary rows (raw_json holds the full bundle). */
+export function roundTripCombosToItineraries(combos: RoundTripCombo[]): NormalizedItinerary[] {
+  return combos.map((c) => ({
+    ...c.outIt,
+    price: c.roundTripPrice,
+    raw: comboToStored(c),
+  }))
 }

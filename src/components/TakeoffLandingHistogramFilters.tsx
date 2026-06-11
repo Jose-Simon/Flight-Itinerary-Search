@@ -66,9 +66,9 @@ function TimeOfDayRangeRow({
 
   const rangeLabel =
     minN != null || maxN != null
-      ? `range ${formatClockMinutes(minN ?? poolMin)} — ${formatClockMinutes(maxN ?? poolMax)}`
+      ? `filter ${formatClockMinutes(minN ?? poolMin)} — ${formatClockMinutes(maxN ?? poolMax)}`
       : empty
-        ? 'no times in pool'
+        ? 'set range below (applies when results load)'
         : `pool ${formatClockMinutes(poolMin)} — ${formatClockMinutes(poolMax)}`
 
   const maxC = Math.max(1, ...counts)
@@ -83,7 +83,7 @@ function TimeOfDayRangeRow({
         <span className="duration-hist-title">{title}</span>
         <span className="duration-hist-range-label muted small">{rangeLabel}</span>
       </div>
-      <div className="duration-hist-chart" style={{ minWidth: `${Math.max(200, counts.length * 10)}px` }}>
+      <div className="duration-hist-chart">
         <div
           className="duration-hist-bars"
           role="img"
@@ -131,7 +131,6 @@ function TimeOfDayRangeRow({
             step={15}
             value={minSlider}
             onChange={(e) => onMin(formatClockMinutes(Number(e.target.value)))}
-            disabled={empty}
           />
           <input
             type="range"
@@ -141,7 +140,6 @@ function TimeOfDayRangeRow({
             step={15}
             value={maxSlider}
             onChange={(e) => onMax(formatClockMinutes(Number(e.target.value)))}
-            disabled={empty}
           />
         </div>
       </div>
@@ -155,7 +153,6 @@ function TimeOfDayRangeRow({
               value={minStr}
               onChange={(e) => onMin(e.target.value)}
               onBlur={() => onMin(canonicalTimeInputString(minStr))}
-              disabled={empty}
               aria-label={`${title} minimum, HH:MM`}
             />
           </div>
@@ -169,7 +166,6 @@ function TimeOfDayRangeRow({
               value={maxStr}
               onChange={(e) => onMax(e.target.value)}
               onBlur={() => onMax(canonicalTimeInputString(maxStr))}
-              disabled={empty}
               aria-label={`${title} maximum, HH:MM`}
             />
           </div>
