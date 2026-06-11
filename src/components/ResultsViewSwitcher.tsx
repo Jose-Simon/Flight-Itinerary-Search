@@ -588,10 +588,16 @@ function ListView({
                       <td className="r rv-td-fare">{fmtPrice(it.price, priceCurrency)}</td>
                       <td className="r rv-mono">{m.depTimeStr}</td>
                       <td className="r rv-mono">
-                        {m.arrTimeStr}{m.arrDayPlus > 0 && <sup>+{m.arrDayPlus}</sup>}
+                        {m.arrTimeStr}{m.arrDayPlus > 0 && <sup className="rv-dayplus">+{m.arrDayPlus}</sup>}
                       </td>
                       <td className="c"><StopBadge n={m.stops} /></td>
-                      <td className="r rv-mono">{m.layDur}</td>
+                      <td className="r">
+                        {m.totalLayMin > 0 ? (
+                          <span className={`rv-lay-pill rv-lay-pill--${m.totalLayMin < 60 ? 'short' : m.totalLayMin > 480 ? 'long' : 'normal'}`}>
+                            {m.layDur}
+                          </span>
+                        ) : <span className="rv-mono">—</span>}
+                      </td>
                       <td className="r rv-mono">{fmtMin(m.flightMin)}</td>
                       <td className="r rv-mono">{fmtMin(it.totalDurationMinutes)}</td>
                       <td className="rv-col-bar"><LabeledSegBar it={it} /></td>

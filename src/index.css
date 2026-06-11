@@ -6411,21 +6411,29 @@ button.pw-stat-col.pw-stat-sorted {
 .rv-tablewrap { display: flex; flex-direction: column; }
 .rv-table-layout { display: flex; gap: 0; align-items: flex-start; }
 .rv-tablescroll { flex: 1; min-width: 0; overflow-x: auto; }
-.rv-table { width: 100%; border-collapse: collapse; font-size: 12px; white-space: nowrap; }
-.rv-table th { position: sticky; top: 0; z-index: 2; background: var(--surface); padding: 6px 10px; text-align: left; font-size: 10px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); border-bottom: 1px solid var(--border); user-select: none; }
+.rv-table { width: 100%; border-collapse: collapse; font-size: 13px; white-space: nowrap; }
+.rv-table th { position: sticky; top: 0; z-index: 2; background: var(--surface); padding: 7px 12px; text-align: left; font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); border-bottom: 1px solid var(--border); user-select: none; }
 .rv-table th.sortable { cursor: pointer; }
 .rv-table th.sortable:hover { color: var(--text); }
 .rv-table th.on { color: var(--accent); }
 .rv-table th.r, .rv-table td.r { text-align: right; }
 .rv-table th.c, .rv-table td.c { text-align: center; }
-.rv-table td { padding: 6px 10px; color: var(--text); border-bottom: 1px solid var(--border); vertical-align: middle; }
+.rv-table td { padding: 9px 12px; color: var(--text); border-bottom: 1px solid var(--border); vertical-align: middle; }
 .rv-table tbody tr { cursor: pointer; transition: background 0.1s; }
 .rv-table tbody tr:hover { background: rgba(255,255,255,0.03); }
-.rv-table tbody tr.active { background: rgba(79,143,247,0.07); }
-.rv-td-fare { font-family: 'JetBrains Mono', monospace; font-weight: 700; font-size: 13px; color: var(--text); }
-.rv-td-route { color: var(--muted); font-size: 11px; }
-.rv-mono { font-family: 'JetBrains Mono', monospace; font-size: 11px; }
+.rv-table tbody tr.active { background: rgba(79,143,247,0.09); }
+.rv-table tbody tr.highlighted { background: rgba(255,255,255,0.03); }
+.rv-td-fare { font-family: 'JetBrains Mono', monospace; font-weight: 700; font-size: 15px; color: var(--accent); }
+.rv-td-route { color: var(--text); font-size: 13px; font-weight: 500; }
+.rv-mono { font-family: 'JetBrains Mono', monospace; font-size: 13px; }
 .rv-segcol { width: 80px; }
+/* Day-offset superscript (+1, +2) on arrival column */
+.rv-dayplus { color: var(--accent); font-size: 0.68em; font-weight: 700; }
+/* Layover duration pill */
+.rv-lay-pill { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 11px; font-weight: 600; white-space: nowrap; font-family: 'JetBrains Mono', monospace; }
+.rv-lay-pill--normal { background: rgba(34,197,94,0.13); color: rgb(74,222,128); border: 1px solid rgba(34,197,94,0.28); }
+.rv-lay-pill--short  { background: rgba(239,68,68,0.12);  color: rgb(252,165,165); border: 1px solid rgba(239,68,68,0.28); }
+.rv-lay-pill--long   { background: rgba(234,179,8,0.12);  color: rgb(253,224,71);  border: 1px solid rgba(234,179,8,0.28); }
 
 /* ── Preview pane (original rule — overridden below) */
 .rv-preview { width: 260px; flex-shrink: 0; border-left: 1px solid var(--border); padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; }
