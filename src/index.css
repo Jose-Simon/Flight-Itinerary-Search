@@ -468,6 +468,29 @@ html, body {
   font-size: 0.78rem;
 }
 
+/* ── Flight Quality filter block (legroom + often-delayed) ─────────────────── */
+.fq-block { display: flex; flex-direction: column; gap: 12px; }
+.fq-section { display: flex; flex-direction: column; gap: 6px; }
+.fq-label { font-size: 12px; font-weight: 600; color: var(--ink-1); text-transform: uppercase; letter-spacing: 0.04em; }
+.fq-legroom-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.fq-chip {
+  background: transparent;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  color: var(--ink-1);
+  font-size: 12px;
+  height: 28px;
+  padding: 0 10px;
+  cursor: pointer;
+  transition: background 0.1s, border-color 0.1s, color 0.1s;
+}
+.fq-chip:hover { background: var(--hover); }
+.fq-chip.on { background: var(--sel-grad); border-color: var(--sel); color: #fff; }
+.fq-delay-toggle { display: flex; align-items: flex-start; gap: 7px; cursor: pointer; font-size: 13px; color: var(--ink-0); }
+.fq-delay-toggle input { margin-top: 2px; flex-shrink: 0; }
+.fq-delay-count { font-size: 12px; }
+.fq-delay-hint { margin: 2px 0 0 22px; }
+
 .panel {
   background: var(--surface);
   border: 1px solid var(--border);
@@ -2697,6 +2720,37 @@ details.pw-pair-filters-section[open] .pw-pair-filters-summary-chevron {
   font-size: 0.78rem;
   color: var(--muted);
   line-height: 1.35;
+}
+.tl-travel-meta-line { margin: 0; }
+.tl-seg-badges { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; }
+
+/* Segment quality badges (legroom, delay, amenities) — shared by card & preview */
+.tl-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 11px;
+  line-height: 1;
+  padding: 2px 6px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+.tl-badge--legroom {
+  color: hsl(210, 70%, 55%);
+  background: hsl(210, 70%, 55%, 0.1);
+  border-color: hsl(210, 70%, 55%, 0.25);
+}
+.tl-badge--delay {
+  color: hsl(30, 90%, 50%);
+  background: hsl(30, 90%, 50%, 0.1);
+  border-color: hsl(30, 90%, 50%, 0.3);
+  font-weight: 600;
+}
+.tl-badge--amenity {
+  color: var(--ink-2);
+  background: var(--surface-2);
+  border-color: var(--border);
 }
 
 .tl-overnight {
@@ -6404,7 +6458,9 @@ button.pw-stat-col.pw-stat-sorted {
 /* No margin-left — the invisible rv-tl-time--empty span (78px) already provides the indent */
 .rv-tl-rail { width: 9px; display: flex; justify-content: center; flex-shrink: 0; }
 .rv-tl-rail::before { content: ''; display: block; width: 1px; background: var(--border-strong); flex: 1; }
-.rv-tl-dur { font-size: 12px; color: var(--ink-1); font-weight: 500; padding: 3px 0; }
+.rv-tl-leg-body { display: flex; flex-direction: column; gap: 4px; padding: 3px 0; }
+.rv-tl-dur { font-size: 12px; color: var(--ink-1); font-weight: 500; }
+.rv-tl-badges { display: flex; flex-wrap: wrap; gap: 4px; }
 .rv-tl-layover { display: flex; align-items: center; gap: 10px; padding: 5px 0; }
 /* No margin-left — the invisible rv-tl-time--empty span (78px) already provides the indent */
 .rv-tl-layover-dot { width: 9px; height: 9px; border-radius: 2px; background: var(--border-strong); flex-shrink: 0; }

@@ -51,17 +51,28 @@ export function normalizeSerpOption(
   const flights = opt.flights ?? []
   if (!flights.length) return null
 
-  const segments: NormalizedSegment[] = flights.map((f) => ({
-    dep: f.departure_airport?.id ?? '',
-    arr: f.arrival_airport?.id ?? '',
-    depTime: f.departure_airport?.time,
-    arrTime: f.arrival_airport?.time,
-    durationMinutes: f.duration ?? 0,
-    airline: f.airline,
-    airlineLogo: f.airline_logo,
-    flightNumber: f.flight_number,
-    airplane: f.airplane,
-  }))
+  const segments: NormalizedSegment[] = flights.map((f) => {
+    // Parse legroom string e.g. "31 in" → 31
+    const legroomIn = f.legroom ? parseInt(f.legroom, 10) : undefined
+    // Strip legroom from amenities (already shown separately) and carbon estimate
+    const amenities = (f.extensions ?? []).filter(
+      (e) => !/legroom|carbon emissions/i.test(e),
+    )
+    return {
+      dep: f.departure_airport?.id ?? '',
+      arr: f.arrival_airport?.id ?? '',
+      depTime: f.departure_airport?.time,
+      arrTime: f.arrival_airport?.time,
+      durationMinutes: f.duration ?? 0,
+      airline: f.airline,
+      airlineLogo: f.airline_logo,
+      flightNumber: f.flight_number,
+      airplane: f.airplane,
+      ...(legroomIn != null && !isNaN(legroomIn) ? { legroom: legroomIn } : {}),
+      ...(f.often_delayed_by_over_30_min ? { oftenDelayed: true } : {}),
+      ...(amenities.length > 0 ? { amenities } : {}),
+    }
+  })
 
   const layoversRaw = opt.layovers ?? []
   const layovers: NormalizedLayover[] = layoversRaw.map((l, i) => {

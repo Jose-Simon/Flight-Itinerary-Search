@@ -54,6 +54,16 @@ function airportLine(iata: string, names: Map<string, string>): string {
   return n ? `${n} (${iata})` : iata
 }
 
+function amenityIcon(amenity: string): string {
+  const a = amenity.toLowerCase()
+  if (a.includes('wi-fi') || a.includes('wifi')) return '📶 '
+  if (a.includes('power') || a.includes('usb') || a.includes('outlet')) return '⚡ '
+  if (a.includes('video') || a.includes('tv') || a.includes('media') || a.includes('stream')) return '🎬 '
+  if (a.includes('lie flat') || a.includes('suite')) return '🛏 '
+  if (a.includes('seat')) return '💺 '
+  return ''
+}
+
 function layoverTone(
   durationMinutes: number,
   longH: number,
@@ -328,10 +338,27 @@ export function ItineraryCard({
                     <div className="tl-rail-wrap">
                       <span className="tl-rail" aria-hidden />
                     </div>
-                    <p className="tl-travel-meta">
-                      In flight {fmtTravelHrs(s.durationMinutes)}
-                      {tl.overnight ? <span className="tl-overnight"> · Overnight</span> : null}
-                    </p>
+                    <div className="tl-travel-meta">
+                      <p className="tl-travel-meta-line">
+                        In flight {fmtTravelHrs(s.durationMinutes)}
+                        {tl.overnight ? <span className="tl-overnight"> · Overnight</span> : null}
+                      </p>
+                      <div className="tl-seg-badges">
+                        {s.legroom != null && (
+                          <span className="tl-badge tl-badge--legroom" title="Seat pitch">
+                            ↕ {s.legroom} in
+                          </span>
+                        )}
+                        {s.oftenDelayed && (
+                          <span className="tl-badge tl-badge--delay" title="Often delayed by 30+ min">
+                            ⚠ Often delayed
+                          </span>
+                        )}
+                        {s.amenities?.map((a) => (
+                          <span key={a} className="tl-badge tl-badge--amenity">{amenityIcon(a)}{a}</span>
+                        ))}
+                      </div>
+                    </div>
                   </li>
                   <li className="tl-stop">
                     <TimeCol time={tl.arr.time} dayPlus={arrPlus} />

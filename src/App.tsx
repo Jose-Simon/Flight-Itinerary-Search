@@ -15,6 +15,7 @@ import { ResultsRouteMap, type MapSoloFocus } from './components/ResultsRouteMap
 import { SettingsModal } from './components/SettingsModal'
 import { StopsFilterBlock } from './components/StopsFilterBlock'
 import { AircraftFilterBlock } from './components/AircraftFilterBlock'
+import { FlightQualityFilterBlock } from './components/FlightQualityFilterBlock'
 import { FilterChip } from './components/FilterChip'
 import { TakeoffLandingHistogramFilters } from './components/TakeoffLandingHistogramFilters'
 import { SavedSearchesPanel } from './components/SavedSearchesPanel'
@@ -27,6 +28,8 @@ import {
   passesAirlineResultFilter,
   passesItineraryFilters,
   passesAircraftFilter,
+  passesDelayFilter,
+  passesLegroomFilter,
   type AircraftMatchMode,
   dedupeDisplayByWaypoint,
   dedupeDisplayBySchedule,
@@ -495,6 +498,8 @@ export default function App() {
   const [aircraftMatchMode, setAircraftMatchMode] = useState<AircraftMatchMode>(
     () => bootSnapshot.aircraftMatchMode,
   )
+  const [excludeOftenDelayed, setExcludeOftenDelayed] = useState(false)
+  const [minLegroomIn, setMinLegroomIn] = useState<number | null>(null)
   /** Last live/mock SerpApi responses (per flex date) for debugging — not set when loading from SQLite only. */
   const [serpCapture, setSerpCapture] = useState<{
     outbound: SerpSearchDebugBundle | null
@@ -1019,6 +1024,8 @@ export default function App() {
     let list = rawOut.filter((it) => passesItineraryFilters(it, filterOutNoMap))
     list = list.filter((it) => passesAirlineResultFilter(it, airlineExcludedCodes))
     list = list.filter((it) => passesAircraftFilter(it, aircraftFilterSet, aircraftMatchMode))
+    list = list.filter((it) => passesDelayFilter(it, excludeOftenDelayed))
+    list = list.filter((it) => passesLegroomFilter(it, minLegroomIn))
     list = list.filter((it) => passesTimeBucketFilter(it, timeBucketsOut, tzByIata))
     list = list.filter((it) =>
       passesTakeoffTimeRange(
@@ -1057,6 +1064,8 @@ export default function App() {
     let list = rawReturn.filter((it) => passesItineraryFilters(it, filterRetNoMap))
     list = list.filter((it) => passesAirlineResultFilter(it, airlineExcludedCodes))
     list = list.filter((it) => passesAircraftFilter(it, aircraftFilterSet, aircraftMatchMode))
+    list = list.filter((it) => passesDelayFilter(it, excludeOftenDelayed))
+    list = list.filter((it) => passesLegroomFilter(it, minLegroomIn))
     list = list.filter((it) => passesTimeBucketFilter(it, effBucketsRet, tzByIata))
     list = list.filter((it) =>
       passesTakeoffTimeRange(
@@ -1130,6 +1139,8 @@ export default function App() {
     let list = rawOut.filter((it) => passesItineraryFilters(it, filterOut))
     list = list.filter((it) => passesAirlineResultFilter(it, airlineExcludedCodes))
     list = list.filter((it) => passesAircraftFilter(it, aircraftFilterSet, aircraftMatchMode))
+    list = list.filter((it) => passesDelayFilter(it, excludeOftenDelayed))
+    list = list.filter((it) => passesLegroomFilter(it, minLegroomIn))
     list = list.filter((it) => passesTimeBucketFilter(it, timeBucketsOut, tzByIata))
     list = list.filter((it) =>
       passesTakeoffTimeRange(
@@ -1168,6 +1179,8 @@ export default function App() {
     let list = rawReturn.filter((it) => passesItineraryFilters(it, filterRet))
     list = list.filter((it) => passesAirlineResultFilter(it, airlineExcludedCodes))
     list = list.filter((it) => passesAircraftFilter(it, aircraftFilterSet, aircraftMatchMode))
+    list = list.filter((it) => passesDelayFilter(it, excludeOftenDelayed))
+    list = list.filter((it) => passesLegroomFilter(it, minLegroomIn))
     list = list.filter((it) => passesTimeBucketFilter(it, effBucketsRet, tzByIata))
     list = list.filter((it) =>
       passesTakeoffTimeRange(
@@ -1405,6 +1418,8 @@ export default function App() {
                 passesItineraryFilters(it, filterOut) &&
                 passesAirlineResultFilter(it, airlineExcludedCodes) &&
                 passesAircraftFilter(it, aircraftFilterSet, aircraftMatchMode) &&
+                passesDelayFilter(it, excludeOftenDelayed) &&
+                passesLegroomFilter(it, minLegroomIn) &&
                 passesTimeBucketFilter(it, timeBucketsOut, tzByIata) &&
                 passesTakeoffTimeRange(
                   it,
@@ -1462,6 +1477,8 @@ export default function App() {
                 passesItineraryFilters(it, filterRet) &&
                 passesAirlineResultFilter(it, airlineExcludedCodes) &&
                 passesAircraftFilter(it, aircraftFilterSet, aircraftMatchMode) &&
+                passesDelayFilter(it, excludeOftenDelayed) &&
+                passesLegroomFilter(it, minLegroomIn) &&
                 passesTimeBucketFilter(it, effBucketsRet, tzByIata) &&
                 passesTakeoffTimeRange(
                   it,
@@ -5069,6 +5086,14 @@ export default function App() {
               )
             }
             onClearAircraftSelection={() => setAircraftSelectedCodes([])}
+          />
+
+          <FlightQualityFilterBlock
+            items={[...filterPoolOut, ...filterPoolRet]}
+            excludeOftenDelayed={excludeOftenDelayed}
+            onExcludeOftenDelayed={setExcludeOftenDelayed}
+            minLegroomIn={minLegroomIn}
+            onMinLegroom={setMinLegroomIn}
           />
 
           <LayoverRegionsPanel

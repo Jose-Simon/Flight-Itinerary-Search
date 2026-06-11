@@ -190,6 +190,31 @@ export function passesAircraftFilter(
 /** @deprecated Use passesItineraryFilters */
 export const passesFiltersWithExcludedSet = passesItineraryFilters
 
+/**
+ * When `excludeOftenDelayed` is true, rejects itineraries where ANY segment is
+ * flagged as often delayed by 30+ minutes.
+ */
+export function passesDelayFilter(
+  it: NormalizedItinerary,
+  excludeOftenDelayed: boolean,
+): boolean {
+  if (!excludeOftenDelayed) return true
+  return !it.segments.some((s) => s.oftenDelayed === true)
+}
+
+/**
+ * When `minLegroomIn` is set, rejects itineraries where ANY segment has a known
+ * legroom value strictly below the minimum. Segments with unknown legroom are
+ * allowed through (can't exclude what we don't know).
+ */
+export function passesLegroomFilter(
+  it: NormalizedItinerary,
+  minLegroomIn: number | null,
+): boolean {
+  if (minLegroomIn == null) return true
+  return !it.segments.some((s) => s.legroom != null && s.legroom < minLegroomIn)
+}
+
 export function totalLayoverMinutes(it: NormalizedItinerary): number {
   return sumLayoverMinutes(it)
 }

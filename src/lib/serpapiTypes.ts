@@ -23,6 +23,10 @@ export type SerpFlightSegment = {
   airline_logo?: string
   flight_number?: string
   extensions?: string[]
+  /** e.g. "31 in" — legroom/seat pitch for this segment. */
+  legroom?: string
+  /** True when Google flags this flight as often delayed by 30+ minutes. */
+  often_delayed_by_over_30_min?: boolean
 }
 
 export type SerpLayover = {

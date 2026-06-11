@@ -75,6 +75,16 @@ function percentileScore(val: number, sorted: number[]): number | null {
 }
 
 // ── Formatting helpers ────────────────────────────────────────────────────────
+function rvAmenityIcon(amenity: string): string {
+  const a = amenity.toLowerCase()
+  if (a.includes('wi-fi') || a.includes('wifi')) return '📶 '
+  if (a.includes('power') || a.includes('usb') || a.includes('outlet')) return '⚡ '
+  if (a.includes('video') || a.includes('tv') || a.includes('media') || a.includes('stream')) return '🎬 '
+  if (a.includes('lie flat') || a.includes('suite')) return '🛏 '
+  if (a.includes('seat')) return '💺 '
+  return ''
+}
+
 function fmtMin(m: number): string {
   const h = Math.floor(m / 60)
   const mm = m % 60
@@ -417,7 +427,22 @@ function ItinTimeline({ it, tzByIata, displayTimezone, namesByIata }: {
             <li className="rv-tl-leg">
               <span className="rv-tl-time rv-tl-time--empty" />
               <span className="rv-tl-rail" aria-hidden />
-              <span className="rv-tl-dur">In flight · {fmtMin(s.durationMinutes)}</span>
+              <span className="rv-tl-leg-body">
+                <span className="rv-tl-dur">In flight · {fmtMin(s.durationMinutes)}</span>
+                {(s.legroom != null || s.oftenDelayed || (s.amenities && s.amenities.length > 0)) && (
+                  <span className="rv-tl-badges">
+                    {s.legroom != null && (
+                      <span className="tl-badge tl-badge--legroom" title="Seat pitch">↕ {s.legroom} in</span>
+                    )}
+                    {s.oftenDelayed && (
+                      <span className="tl-badge tl-badge--delay" title="Often delayed by 30+ min">⚠ Often delayed</span>
+                    )}
+                    {s.amenities?.map((a) => (
+                      <span key={a} className="tl-badge tl-badge--amenity">{rvAmenityIcon(a)}{a}</span>
+                    ))}
+                  </span>
+                )}
+              </span>
             </li>
             <li className="rv-tl-stop">
               <span className="rv-tl-time">{tl.arr.time}{arrPlus > 0 && <sup>+{arrPlus}</sup>}</span>

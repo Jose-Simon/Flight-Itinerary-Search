@@ -20,6 +20,12 @@ export type NormalizedSegment = {
   airlineLogo?: string
   flightNumber?: string
   airplane?: string
+  /** Seat pitch in inches, parsed from SerpApi `legroom` field (e.g. "31 in" → 31). */
+  legroom?: number
+  /** True when Google flags this flight as often delayed by 30+ minutes. */
+  oftenDelayed?: boolean
+  /** Amenity strings from SerpApi `extensions[]` (Wi-Fi, power, video, etc.). */
+  amenities?: string[]
 }
 
 export type NormalizedItinerary = {
