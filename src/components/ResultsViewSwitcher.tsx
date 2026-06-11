@@ -53,9 +53,23 @@ function scoreColor(score: number): string {
   return `hsl(${Math.round(hue)}, 75%, 60%)`
 }
 
-/** Returns 0–1 position of `val` in [min, max], or null if range is zero. */
-function normalise(val: number, min: number, max: number): number | null {
-  return max > min ? (val - min) / (max - min) : null
+/**
+ * Returns the percentile rank (0–1) of `val` in a pre-sorted ascending array.
+ * Ties use the midpoint rank so all equal values get the same colour.
+ * Returns null when the array has fewer than 2 entries.
+ */
+function percentileScore(val: number, sorted: number[]): number | null {
+  const n = sorted.length
+  if (n <= 1) return null
+  // Lower bound: first index where sorted[i] >= val
+  let lo = 0, hi = n
+  while (lo < hi) { const mid = (lo + hi) >> 1; if (sorted[mid] < val) lo = mid + 1; else hi = mid }
+  const first = lo
+  // Upper bound: last index where sorted[i] <= val
+  lo = 0; hi = n
+  while (lo < hi) { const mid = (lo + hi) >> 1; if (sorted[mid] <= val) lo = mid + 1; else hi = mid }
+  const last = lo - 1
+  return ((first + last) / 2) / (n - 1)
 }
 
 // ── Formatting helpers ────────────────────────────────────────────────────────
@@ -545,17 +559,18 @@ function ListView({
     return id ? (items.find((it) => itineraryScheduleKey(it) === id) ?? null) : null
   }, [lockId, hoverId, items])
 
-  // Colour-scale ranges for price, total duration, and flying duration
+  // Sorted arrays for percentile-based colour scale (price, total duration, flying duration, layover)
   const colourRanges = useMemo(() => {
-    const prices   = items.map((it) => it.price).filter((p): p is number => p != null)
-    const totals   = items.map((it) => it.totalDurationMinutes)
-    const flights  = items.map((it) => metas.get(it)!.flightMin)
-    const layovers = items.map((it) => metas.get(it)!.totalLayMin).filter((l) => l > 0)
+    const asc = (a: number, b: number) => a - b
+    const prices   = items.map((it) => it.price).filter((p): p is number => p != null).sort(asc)
+    const totals   = items.map((it) => it.totalDurationMinutes).sort(asc)
+    const flights  = items.map((it) => metas.get(it)!.flightMin).sort(asc)
+    const layovers = items.map((it) => metas.get(it)!.totalLayMin).filter((l) => l > 0).sort(asc)
     return {
-      price:   prices.length   ? { min: Math.min(...prices),   max: Math.max(...prices)   } : null,
-      total:   totals.length   ? { min: Math.min(...totals),   max: Math.max(...totals)   } : null,
-      flight:  flights.length  ? { min: Math.min(...flights),  max: Math.max(...flights)  } : null,
-      layover: layovers.length ? { min: Math.min(...layovers), max: Math.max(...layovers) } : null,
+      price:   prices.length   >= 2 ? prices   : null,
+      total:   totals.length   >= 2 ? totals   : null,
+      flight:  flights.length  >= 2 ? flights  : null,
+      layover: layovers.length >= 2 ? layovers : null,
     }
   }, [items, metas])
 
@@ -618,10 +633,10 @@ function ListView({
                       onClick={() => setLockId(lockId === key ? null : key)}
                     >
                       {(() => {
-                        const priceScore   = it.price != null && colourRanges.price   ? normalise(it.price,                    colourRanges.price.min,   colourRanges.price.max)   : null
-                        const totalScore   = colourRanges.total   ? normalise(it.totalDurationMinutes, colourRanges.total.min,   colourRanges.total.max)   : null
-                        const flightScore  = colourRanges.flight  ? normalise(m.flightMin,             colourRanges.flight.min,  colourRanges.flight.max)  : null
-                        const layScore     = m.totalLayMin > 0 && colourRanges.layover ? normalise(m.totalLayMin, colourRanges.layover.min, colourRanges.layover.max) : null
+                        const priceScore   = it.price != null && colourRanges.price   ? percentileScore(it.price,                    colourRanges.price)   : null
+                        const totalScore   = colourRanges.total   ? percentileScore(it.totalDurationMinutes, colourRanges.total)   : null
+                        const flightScore  = colourRanges.flight  ? percentileScore(m.flightMin,             colourRanges.flight)  : null
+                        const layScore     = m.totalLayMin > 0 && colourRanges.layover ? percentileScore(m.totalLayMin, colourRanges.layover) : null
                         return (
                           <>
                             <td><AirlineLogos logos={logos} /></td>
