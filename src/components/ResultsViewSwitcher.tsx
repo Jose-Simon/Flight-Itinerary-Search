@@ -38,6 +38,26 @@ function lsSet(k: string, v: string): void {
   try { localStorage.setItem(k, v) } catch {}
 }
 
+// ── Colour scale helpers ──────────────────────────────────────────────────────
+/**
+ * Maps a normalised score (0 = best, 1 = worst) to an HSL colour for dark theme.
+ * 0   → green  hsl(145, 75%, 60%)
+ * 0.5 → yellow hsl(48,  75%, 60%)
+ * 1   → red    hsl(4,   75%, 60%)
+ */
+function scoreColor(score: number): string {
+  const s = Math.max(0, Math.min(1, score))
+  const hue = s < 0.5
+    ? 145 - (145 - 48) * (s / 0.5)
+    : 48  - (48  - 4)  * ((s - 0.5) / 0.5)
+  return `hsl(${Math.round(hue)}, 75%, 60%)`
+}
+
+/** Returns 0–1 position of `val` in [min, max], or null if range is zero. */
+function normalise(val: number, min: number, max: number): number | null {
+  return max > min ? (val - min) / (max - min) : null
+}
+
 // ── Formatting helpers ────────────────────────────────────────────────────────
 function fmtMin(m: number): string {
   const h = Math.floor(m / 60)
@@ -525,6 +545,20 @@ function ListView({
     return id ? (items.find((it) => itineraryScheduleKey(it) === id) ?? null) : null
   }, [lockId, hoverId, items])
 
+  // Colour-scale ranges for price, total duration, and flying duration
+  const colourRanges = useMemo(() => {
+    const prices   = items.map((it) => it.price).filter((p): p is number => p != null)
+    const totals   = items.map((it) => it.totalDurationMinutes)
+    const flights  = items.map((it) => metas.get(it)!.flightMin)
+    const layovers = items.map((it) => metas.get(it)!.totalLayMin).filter((l) => l > 0)
+    return {
+      price:   prices.length   ? { min: Math.min(...prices),   max: Math.max(...prices)   } : null,
+      total:   totals.length   ? { min: Math.min(...totals),   max: Math.max(...totals)   } : null,
+      flight:  flights.length  ? { min: Math.min(...flights),  max: Math.max(...flights)  } : null,
+      layover: layovers.length ? { min: Math.min(...layovers), max: Math.max(...layovers) } : null,
+    }
+  }, [items, metas])
+
   const Th = ({ k, label, align }: { k?: RvSortKey; label: string; align?: 'r' | 'c' }) => (
     <th
       className={[align ?? '', k ? 'sortable' : '', k && sortKey === k ? 'on' : ''].filter(Boolean).join(' ')}
@@ -583,24 +617,39 @@ function ListView({
                       onMouseLeave={() => setHoverId(null)}
                       onClick={() => setLockId(lockId === key ? null : key)}
                     >
-                      <td><AirlineLogos logos={logos} /></td>
-                      <td className="rv-td-route">{m.routeStr}</td>
-                      <td className="r rv-td-fare">{fmtPrice(it.price, priceCurrency)}</td>
-                      <td className="r rv-mono">{m.depTimeStr}</td>
-                      <td className="r rv-mono">
-                        {m.arrTimeStr}{m.arrDayPlus > 0 && <sup className="rv-dayplus">+{m.arrDayPlus}</sup>}
-                      </td>
-                      <td className="c"><StopBadge n={m.stops} /></td>
-                      <td className="r">
-                        {m.totalLayMin > 0 ? (
-                          <span className={`rv-lay-pill rv-lay-pill--${m.totalLayMin < 60 ? 'short' : m.totalLayMin > 480 ? 'long' : 'normal'}`}>
-                            {m.layDur}
-                          </span>
-                        ) : <span className="rv-mono">—</span>}
-                      </td>
-                      <td className="r rv-mono">{fmtMin(m.flightMin)}</td>
-                      <td className="r rv-mono">{fmtMin(it.totalDurationMinutes)}</td>
-                      <td className="rv-col-bar"><LabeledSegBar it={it} /></td>
+                      {(() => {
+                        const priceScore   = it.price != null && colourRanges.price   ? normalise(it.price,                    colourRanges.price.min,   colourRanges.price.max)   : null
+                        const totalScore   = colourRanges.total   ? normalise(it.totalDurationMinutes, colourRanges.total.min,   colourRanges.total.max)   : null
+                        const flightScore  = colourRanges.flight  ? normalise(m.flightMin,             colourRanges.flight.min,  colourRanges.flight.max)  : null
+                        const layScore     = m.totalLayMin > 0 && colourRanges.layover ? normalise(m.totalLayMin, colourRanges.layover.min, colourRanges.layover.max) : null
+                        return (
+                          <>
+                            <td><AirlineLogos logos={logos} /></td>
+                            <td className="rv-td-route">{m.routeStr}</td>
+                            <td className="r rv-td-fare" style={priceScore != null ? { color: scoreColor(priceScore) } : undefined}>
+                              {fmtPrice(it.price, priceCurrency)}
+                            </td>
+                            <td className="r rv-mono">{m.depTimeStr}</td>
+                            <td className="r rv-mono">
+                              {m.arrTimeStr}{m.arrDayPlus > 0 && <sup className="rv-dayplus">+{m.arrDayPlus}</sup>}
+                            </td>
+                            <td className="c"><StopBadge n={m.stops} /></td>
+                            <td className="r">
+                              {m.totalLayMin > 0 ? (
+                                <span
+                                  className={`rv-lay-pill rv-lay-pill--${m.totalLayMin < 60 ? 'short' : m.totalLayMin > 480 ? 'long' : 'normal'}`}
+                                  style={layScore != null ? { color: scoreColor(layScore), borderColor: scoreColor(layScore) + '55' } : undefined}
+                                >
+                                  {m.layDur}
+                                </span>
+                              ) : <span className="rv-mono">—</span>}
+                            </td>
+                            <td className="r rv-mono" style={flightScore  != null ? { color: scoreColor(flightScore)  } : undefined}>{fmtMin(m.flightMin)}</td>
+                            <td className="r rv-mono" style={totalScore   != null ? { color: scoreColor(totalScore)   } : undefined}>{fmtMin(it.totalDurationMinutes)}</td>
+                            <td className="rv-col-bar"><LabeledSegBar it={it} /></td>
+                          </>
+                        )
+                      })()}
                     </tr>
                   )
                 })}
