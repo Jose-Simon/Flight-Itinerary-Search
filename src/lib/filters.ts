@@ -202,17 +202,42 @@ export function passesDelayFilter(
   return !it.segments.some((s) => s.oftenDelayed === true)
 }
 
+export type LegroomMatchMode = 'any' | 'every'
+
 /**
- * When `minLegroomIn` is set, rejects itineraries where ANY segment has a known
- * legroom value strictly below the minimum. Segments with unknown legroom are
- * allowed through (can't exclude what we don't know).
+ * Legroom filter — segments with unknown legroom are always allowed through.
+ * - `every` (default): ALL segments with known legroom must meet the minimum.
+ * - `any`: at least ONE segment with known legroom must meet the minimum.
  */
 export function passesLegroomFilter(
   it: NormalizedItinerary,
   minLegroomIn: number | null,
+  mode: LegroomMatchMode = 'every',
 ): boolean {
   if (minLegroomIn == null) return true
-  return !it.segments.some((s) => s.legroom != null && s.legroom < minLegroomIn)
+  const known = it.segments.filter((s) => s.legroom != null)
+  if (known.length === 0) return true
+  if (mode === 'any') return known.some((s) => s.legroom! >= minLegroomIn)
+  return known.every((s) => s.legroom! >= minLegroomIn)
+}
+
+export type AmenityMatchMode = 'any' | 'every'
+
+/**
+ * Amenity filter — when `selected` is empty, all itineraries pass.
+ * - `any`: at least one segment on the itinerary has at least one of the selected amenities.
+ * - `every`: every segment on the itinerary has at least one of the selected amenities.
+ */
+export function passesAmenityFilter(
+  it: NormalizedItinerary,
+  selected: Set<string>,
+  mode: AmenityMatchMode,
+): boolean {
+  if (selected.size === 0) return true
+  const segHasAny = (s: { amenities?: string[] }) =>
+    (s.amenities ?? []).some((a) => selected.has(a))
+  if (mode === 'any') return it.segments.some(segHasAny)
+  return it.segments.length > 0 && it.segments.every(segHasAny)
 }
 
 export function totalLayoverMinutes(it: NormalizedItinerary): number {

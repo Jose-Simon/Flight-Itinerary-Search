@@ -469,9 +469,30 @@ html, body {
 }
 
 /* ── Flight Quality filter block (legroom + often-delayed) ─────────────────── */
-.fq-block { display: flex; flex-direction: column; gap: 12px; }
-.fq-section { display: flex; flex-direction: column; gap: 6px; }
+.fq-block { display: flex; flex-direction: column; gap: 16px; }
+.fq-section { display: flex; flex-direction: column; gap: 7px; }
+.fq-section-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .fq-label { font-size: 12px; font-weight: 600; color: var(--ink-1); text-transform: uppercase; letter-spacing: 0.04em; }
+.fq-hint { margin: 0; }
+
+/* Any / Every match-mode toggle */
+.fq-match-toggle { display: flex; align-items: center; gap: 2px; }
+.fq-match-label { font-size: 11px; color: var(--muted); margin-right: 4px; }
+.fq-match-btn {
+  background: transparent;
+  border: 1px solid var(--border-strong);
+  color: var(--ink-2);
+  font-size: 11px;
+  height: 22px;
+  padding: 0 8px;
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s;
+}
+.fq-match-btn:first-of-type { border-radius: 3px 0 0 3px; }
+.fq-match-btn:last-of-type  { border-radius: 0 3px 3px 0; border-left: none; }
+.fq-match-btn.on { background: var(--sel); border-color: var(--sel); color: #fff; }
+
+/* Legroom chips */
 .fq-legroom-chips { display: flex; flex-wrap: wrap; gap: 5px; }
 .fq-chip {
   background: transparent;
@@ -486,10 +507,18 @@ html, body {
 }
 .fq-chip:hover { background: var(--hover); }
 .fq-chip.on { background: var(--sel-grad); border-color: var(--sel); color: #fff; }
+
+/* Amenity list */
+.fq-amenity-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px; }
+.fq-amenity-row { display: flex; align-items: center; gap: 7px; cursor: pointer; font-size: 13px; color: var(--ink-1); }
+.fq-amenity-row:hover { color: var(--ink-0); }
+.fq-amenity-name { flex: 1; }
+
+/* Delay section */
 .fq-delay-toggle { display: flex; align-items: flex-start; gap: 7px; cursor: pointer; font-size: 13px; color: var(--ink-0); }
 .fq-delay-toggle input { margin-top: 2px; flex-shrink: 0; }
+.fq-delay-toggle--inactive { color: var(--ink-2); cursor: default; }
 .fq-delay-count { font-size: 12px; }
-.fq-delay-hint { margin: 2px 0 0 22px; }
 
 .panel {
   background: var(--surface);

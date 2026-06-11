@@ -30,7 +30,10 @@ import {
   passesAircraftFilter,
   passesDelayFilter,
   passesLegroomFilter,
+  passesAmenityFilter,
   type AircraftMatchMode,
+  type LegroomMatchMode,
+  type AmenityMatchMode,
   dedupeDisplayByWaypoint,
   dedupeDisplayBySchedule,
   sortItineraries,
@@ -500,6 +503,9 @@ export default function App() {
   )
   const [excludeOftenDelayed, setExcludeOftenDelayed] = useState(false)
   const [minLegroomIn, setMinLegroomIn] = useState<number | null>(null)
+  const [legroomMatchMode, setLegroomMatchMode] = useState<LegroomMatchMode>('every')
+  const [selectedAmenities, setSelectedAmenities] = useState<string[]>([])
+  const [amenityMatchMode, setAmenityMatchMode] = useState<AmenityMatchMode>('any')
   /** Last live/mock SerpApi responses (per flex date) for debugging — not set when loading from SQLite only. */
   const [serpCapture, setSerpCapture] = useState<{
     outbound: SerpSearchDebugBundle | null
@@ -847,6 +853,18 @@ export default function App() {
   )
 
   const aircraftFilterSet = useMemo(() => new Set(aircraftSelectedCodes), [aircraftSelectedCodes])
+  const amenityFilterSet = useMemo(() => new Set(selectedAmenities), [selectedAmenities])
+
+  /** Distinct amenity strings across all itineraries in the pool (for the filter UI). */
+  const amenityOptions = useMemo(() => {
+    const s = new Set<string>()
+    for (const it of [...filterPoolOut, ...filterPoolRet]) {
+      for (const seg of it.segments) {
+        for (const a of seg.amenities ?? []) s.add(a)
+      }
+    }
+    return [...s].sort()
+  }, [filterPoolOut, filterPoolRet])
 
   /** Distinct aircraft types with how many itineraries (out + return) use that type on ≥1 leg. */
   const aircraftOptionsWithCounts = useMemo(() => {
@@ -1025,7 +1043,8 @@ export default function App() {
     list = list.filter((it) => passesAirlineResultFilter(it, airlineExcludedCodes))
     list = list.filter((it) => passesAircraftFilter(it, aircraftFilterSet, aircraftMatchMode))
     list = list.filter((it) => passesDelayFilter(it, excludeOftenDelayed))
-    list = list.filter((it) => passesLegroomFilter(it, minLegroomIn))
+    list = list.filter((it) => passesLegroomFilter(it, minLegroomIn, legroomMatchMode))
+    list = list.filter((it) => passesAmenityFilter(it, amenityFilterSet, amenityMatchMode))
     list = list.filter((it) => passesTimeBucketFilter(it, timeBucketsOut, tzByIata))
     list = list.filter((it) =>
       passesTakeoffTimeRange(
@@ -1057,6 +1076,11 @@ export default function App() {
     dedupeMode,
     aircraftFilterSet,
     aircraftMatchMode,
+    excludeOftenDelayed,
+    minLegroomIn,
+    legroomMatchMode,
+    amenityFilterSet,
+    amenityMatchMode,
     outTakeoffLandingBounds,
   ])
 
@@ -1065,7 +1089,8 @@ export default function App() {
     list = list.filter((it) => passesAirlineResultFilter(it, airlineExcludedCodes))
     list = list.filter((it) => passesAircraftFilter(it, aircraftFilterSet, aircraftMatchMode))
     list = list.filter((it) => passesDelayFilter(it, excludeOftenDelayed))
-    list = list.filter((it) => passesLegroomFilter(it, minLegroomIn))
+    list = list.filter((it) => passesLegroomFilter(it, minLegroomIn, legroomMatchMode))
+    list = list.filter((it) => passesAmenityFilter(it, amenityFilterSet, amenityMatchMode))
     list = list.filter((it) => passesTimeBucketFilter(it, effBucketsRet, tzByIata))
     list = list.filter((it) =>
       passesTakeoffTimeRange(
@@ -1097,6 +1122,11 @@ export default function App() {
     dedupeMode,
     aircraftFilterSet,
     aircraftMatchMode,
+    excludeOftenDelayed,
+    minLegroomIn,
+    legroomMatchMode,
+    amenityFilterSet,
+    amenityMatchMode,
     retTakeoffLandingBounds,
   ])
 
@@ -1140,7 +1170,8 @@ export default function App() {
     list = list.filter((it) => passesAirlineResultFilter(it, airlineExcludedCodes))
     list = list.filter((it) => passesAircraftFilter(it, aircraftFilterSet, aircraftMatchMode))
     list = list.filter((it) => passesDelayFilter(it, excludeOftenDelayed))
-    list = list.filter((it) => passesLegroomFilter(it, minLegroomIn))
+    list = list.filter((it) => passesLegroomFilter(it, minLegroomIn, legroomMatchMode))
+    list = list.filter((it) => passesAmenityFilter(it, amenityFilterSet, amenityMatchMode))
     list = list.filter((it) => passesTimeBucketFilter(it, timeBucketsOut, tzByIata))
     list = list.filter((it) =>
       passesTakeoffTimeRange(
@@ -1172,6 +1203,11 @@ export default function App() {
     dedupeMode,
     aircraftFilterSet,
     aircraftMatchMode,
+    excludeOftenDelayed,
+    minLegroomIn,
+    legroomMatchMode,
+    amenityFilterSet,
+    amenityMatchMode,
     outTakeoffLandingBounds,
   ])
 
@@ -1180,7 +1216,8 @@ export default function App() {
     list = list.filter((it) => passesAirlineResultFilter(it, airlineExcludedCodes))
     list = list.filter((it) => passesAircraftFilter(it, aircraftFilterSet, aircraftMatchMode))
     list = list.filter((it) => passesDelayFilter(it, excludeOftenDelayed))
-    list = list.filter((it) => passesLegroomFilter(it, minLegroomIn))
+    list = list.filter((it) => passesLegroomFilter(it, minLegroomIn, legroomMatchMode))
+    list = list.filter((it) => passesAmenityFilter(it, amenityFilterSet, amenityMatchMode))
     list = list.filter((it) => passesTimeBucketFilter(it, effBucketsRet, tzByIata))
     list = list.filter((it) =>
       passesTakeoffTimeRange(
@@ -1212,6 +1249,11 @@ export default function App() {
     dedupeMode,
     aircraftFilterSet,
     aircraftMatchMode,
+    excludeOftenDelayed,
+    minLegroomIn,
+    legroomMatchMode,
+    amenityFilterSet,
+    amenityMatchMode,
     retTakeoffLandingBounds,
   ])
 
@@ -1419,7 +1461,8 @@ export default function App() {
                 passesAirlineResultFilter(it, airlineExcludedCodes) &&
                 passesAircraftFilter(it, aircraftFilterSet, aircraftMatchMode) &&
                 passesDelayFilter(it, excludeOftenDelayed) &&
-                passesLegroomFilter(it, minLegroomIn) &&
+                passesLegroomFilter(it, minLegroomIn, legroomMatchMode) &&
+                passesAmenityFilter(it, amenityFilterSet, amenityMatchMode) &&
                 passesTimeBucketFilter(it, timeBucketsOut, tzByIata) &&
                 passesTakeoffTimeRange(
                   it,
@@ -1462,6 +1505,11 @@ export default function App() {
     airlineExcludedCodes,
     aircraftFilterSet,
     aircraftMatchMode,
+    excludeOftenDelayed,
+    minLegroomIn,
+    legroomMatchMode,
+    amenityFilterSet,
+    amenityMatchMode,
     timeBucketsOut,
     tzByIata,
     outTakeoffLandingBounds,
@@ -1478,7 +1526,8 @@ export default function App() {
                 passesAirlineResultFilter(it, airlineExcludedCodes) &&
                 passesAircraftFilter(it, aircraftFilterSet, aircraftMatchMode) &&
                 passesDelayFilter(it, excludeOftenDelayed) &&
-                passesLegroomFilter(it, minLegroomIn) &&
+                passesLegroomFilter(it, minLegroomIn, legroomMatchMode) &&
+                passesAmenityFilter(it, amenityFilterSet, amenityMatchMode) &&
                 passesTimeBucketFilter(it, effBucketsRet, tzByIata) &&
                 passesTakeoffTimeRange(
                   it,
@@ -1521,6 +1570,11 @@ export default function App() {
     airlineExcludedCodes,
     aircraftFilterSet,
     aircraftMatchMode,
+    excludeOftenDelayed,
+    minLegroomIn,
+    legroomMatchMode,
+    amenityFilterSet,
+    amenityMatchMode,
     effBucketsRet,
     tzByIata,
     retTakeoffLandingBounds,
@@ -5090,10 +5144,23 @@ export default function App() {
 
           <FlightQualityFilterBlock
             items={[...filterPoolOut, ...filterPoolRet]}
+            amenityOptions={amenityOptions}
             excludeOftenDelayed={excludeOftenDelayed}
             onExcludeOftenDelayed={setExcludeOftenDelayed}
             minLegroomIn={minLegroomIn}
             onMinLegroom={setMinLegroomIn}
+            legroomMatchMode={legroomMatchMode}
+            onLegroomMatchMode={setLegroomMatchMode}
+            selectedAmenities={selectedAmenities}
+            onToggleAmenity={(a, on) =>
+              setSelectedAmenities((prev) => {
+                const s = new Set(prev)
+                if (on) s.add(a); else s.delete(a)
+                return [...s].sort()
+              })
+            }
+            amenityMatchMode={amenityMatchMode}
+            onAmenityMatchMode={setAmenityMatchMode}
           />
 
           <LayoverRegionsPanel
