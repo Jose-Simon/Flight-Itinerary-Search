@@ -22,6 +22,8 @@ import { enrichAirlineFromMeta, type AirlinesMeta } from '../lib/airlineMetaLook
 // ── Types ────────────────────────────────────────────────────────────────────
 type ViewMode = 'cards' | 'list' | 'gantt'
 type RvSortKey = 'fare' | 'duration' | 'flightDuration' | 'layover' | 'depart' | 'arrive'
+/** One level of a multi-sort: a column key and direction. */
+type SortSpec = { key: RvSortKey; dir: 1 | -1 }
 
 export type ResultsViewSwitcherProps = ResultsListProps & {
   /** Unique key for localStorage persistence (e.g. 'out' or 'ret'). */
@@ -209,12 +211,17 @@ function getSortVal(it: NormalizedItinerary, m: ItinMeta, key: RvSortKey): numbe
 function sortItemsWithMeta(
   items: NormalizedItinerary[],
   metas: Map<NormalizedItinerary, ItinMeta>,
-  key: RvSortKey,
-  dir: 1 | -1,
+  specs: SortSpec[],
 ): NormalizedItinerary[] {
-  return [...items].sort((a, b) =>
-    (getSortVal(a, metas.get(a)!, key) - getSortVal(b, metas.get(b)!, key)) * dir
-  )
+  if (specs.length === 0) return items
+  return [...items].sort((a, b) => {
+    const ma = metas.get(a)!, mb = metas.get(b)!
+    for (const { key, dir } of specs) {
+      const diff = (getSortVal(a, ma, key) - getSortVal(b, mb, key)) * dir
+      if (diff !== 0) return diff
+    }
+    return 0
+  })
 }
 
 // ── Shared sub-components ─────────────────────────────────────────────────────
@@ -248,7 +255,13 @@ function StopBadge({ n }: { n: number }) {
   )
 }
 
-function SortButtons({ sortKey, sortDir, onSort }: { sortKey: RvSortKey; sortDir: 1 | -1; onSort: (k: RvSortKey) => void }) {
+function SortButtons({
+  sortSpecs, onSort, onClear,
+}: {
+  sortSpecs: SortSpec[]
+  onSort: (k: RvSortKey, additive: boolean) => void
+  onClear: () => void
+}) {
   const defs: [RvSortKey, string][] = [
     ['fare', 'Price'],
     ['duration', 'Duration'],
@@ -257,15 +270,32 @@ function SortButtons({ sortKey, sortDir, onSort }: { sortKey: RvSortKey; sortDir
     ['depart', 'Depart'],
     ['arrive', 'Arrive'],
   ]
+  const isMulti = sortSpecs.length > 1
   return (
     <div className="rv-sortbtns">
       <span className="rv-sortlab">Sort</span>
-      {defs.map(([k, label]) => (
-        <button key={k} type="button" className={`rv-sortbtn ${sortKey === k ? 'on' : ''}`} onClick={() => onSort(k)}>
-          {label}
-          {sortKey === k && <span className="rv-caret">{sortDir === 1 ? ' ↑' : ' ↓'}</span>}
+      {defs.map(([k, label]) => {
+        const idx = sortSpecs.findIndex((s) => s.key === k)
+        const spec = idx !== -1 ? sortSpecs[idx] : null
+        return (
+          <button
+            key={k}
+            type="button"
+            className={`rv-sortbtn ${spec ? 'on' : ''}`}
+            onClick={(e) => onSort(k, e.shiftKey)}
+            title={isMulti ? 'Click to sort by this only · Shift+click to add/toggle' : 'Click to sort · Shift+click to add a secondary sort'}
+          >
+            {label}
+            {spec && <span className="rv-caret">{spec.dir === 1 ? ' ↑' : ' ↓'}</span>}
+            {spec && isMulti && <sup className="rv-sort-rank">{idx + 1}</sup>}
+          </button>
+        )
+      })}
+      {isMulti && (
+        <button type="button" className="rv-sortbtn rv-sortbtn--clear" onClick={onClear} title="Remove all secondary sorts">
+          ✕
         </button>
-      ))}
+      )}
     </div>
   )
 }
@@ -524,7 +554,7 @@ function ItinPreviewPane({
 
 // ============ VIEW: LIST (dense table with labeled bars) =====================
 function ListView({
-  items, metas, sortKey, sortDir, onSort,
+  items, metas, sortSpecs, onSort,
   tzByIata, displayTimezone, namesByIata, priceCurrency,
   gfOrigins, gfDestinations, linkDate, returnDate, cabinClass,
   airlinesMeta, airlineDirectory,
@@ -532,9 +562,8 @@ function ListView({
 }: {
   items: NormalizedItinerary[]
   metas: Map<NormalizedItinerary, ItinMeta>
-  sortKey: RvSortKey
-  sortDir: 1 | -1
-  onSort: (k: RvSortKey) => void
+  sortSpecs: SortSpec[]
+  onSort: (k: RvSortKey, additive: boolean) => void
   tzByIata: Map<string, string>
   displayTimezone: string
   namesByIata: Map<string, string>
@@ -574,15 +603,21 @@ function ListView({
     }
   }, [items, metas])
 
-  const Th = ({ k, label, align }: { k?: RvSortKey; label: string; align?: 'r' | 'c' }) => (
-    <th
-      className={[align ?? '', k ? 'sortable' : '', k && sortKey === k ? 'on' : ''].filter(Boolean).join(' ')}
-      onClick={k ? () => onSort(k) : undefined}
-    >
-      {label}
-      {k && sortKey === k && <span className="rv-caret">{sortDir === 1 ? ' ↑' : ' ↓'}</span>}
-    </th>
-  )
+  const Th = ({ k, label, align }: { k?: RvSortKey; label: string; align?: 'r' | 'c' }) => {
+    const idx = k ? sortSpecs.findIndex((s) => s.key === k) : -1
+    const spec = idx !== -1 ? sortSpecs[idx] : null
+    return (
+      <th
+        className={[align ?? '', k ? 'sortable' : '', spec ? 'on' : ''].filter(Boolean).join(' ')}
+        onClick={k ? (e) => onSort(k, e.shiftKey) : undefined}
+        title={k ? (sortSpecs.length > 1 ? 'Click to sort by this only · Shift+click to add/toggle' : 'Click to sort · Shift+click to add a secondary sort') : undefined}
+      >
+        {label}
+        {spec && <span className="rv-caret">{spec.dir === 1 ? ' ↑' : ' ↓'}</span>}
+        {spec && sortSpecs.length > 1 && <sup className="rv-sort-rank">{idx + 1}</sup>}
+      </th>
+    )
+  }
 
   return (
     <div className="rv-tablewrap panel">
@@ -898,25 +933,62 @@ export function ResultsViewSwitcher({
       return (v === 'cards' || v === 'list' || v === 'gantt') ? v as ViewMode : 'cards'
     }
   )
-  const [rvSortKey, setRvSortKey] = useState<RvSortKey>(
-    () => lsGet(`rv-sort-${persistKey}`, 'duration') as RvSortKey,
-  )
-  const [rvSortDir, setRvSortDir] = useState<1 | -1>(
-    () => (lsGet(`rv-sortdir-${persistKey}`, '1') === '-1' ? -1 : 1),
-  )
+  const [sortSpecs, setSortSpecs] = useState<SortSpec[]>(() => {
+    // Try new JSON format first
+    try {
+      const raw = lsGet(`rv-sortspecs-${persistKey}`, '')
+      if (raw) {
+        const parsed = JSON.parse(raw) as SortSpec[]
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed
+      }
+    } catch { /* ignore */ }
+    // Fall back to legacy single-key format
+    const key = lsGet(`rv-sort-${persistKey}`, 'duration') as RvSortKey
+    const dir = lsGet(`rv-sortdir-${persistKey}`, '1') === '-1' ? -1 as const : 1 as const
+    return [{ key, dir }]
+  })
 
   const handleView = (v: ViewMode) => { setView(v); lsSet(`rv-view-${persistKey}`, v) }
 
-  const handleSort = (k: RvSortKey) => {
-    if (k === rvSortKey) {
-      const next = rvSortDir === 1 ? -1 : (1 as 1 | -1)
-      setRvSortDir(next)
-      lsSet(`rv-sortdir-${persistKey}`, String(next))
-    } else {
-      setRvSortKey(k); setRvSortDir(1)
-      lsSet(`rv-sort-${persistKey}`, k)
-      lsSet(`rv-sortdir-${persistKey}`, '1')
-    }
+  const saveSortSpecs = (specs: SortSpec[]) => {
+    lsSet(`rv-sortspecs-${persistKey}`, JSON.stringify(specs))
+  }
+
+  const handleSort = (k: RvSortKey, additive: boolean) => {
+    setSortSpecs((prev) => {
+      let next: SortSpec[]
+      const idx = prev.findIndex((s) => s.key === k)
+      if (!additive) {
+        // Non-additive: replace all with just this column
+        if (prev.length === 1 && idx === 0) {
+          // Same sole column → toggle direction
+          next = [{ key: k, dir: prev[0].dir === 1 ? -1 : 1 }]
+        } else {
+          next = [{ key: k, dir: 1 }]
+        }
+      } else {
+        // Additive (Shift+click): cycle asc → desc → remove; add if not present
+        if (idx !== -1) {
+          if (prev[idx].dir === 1) {
+            next = prev.map((s, i) => i === idx ? { ...s, dir: -1 as const } : s)
+          } else {
+            next = prev.filter((_, i) => i !== idx)
+            if (next.length === 0) next = [{ key: 'duration', dir: 1 }]
+          }
+        } else {
+          next = [...prev, { key: k, dir: 1 }]
+        }
+      }
+      saveSortSpecs(next)
+      return next
+    })
+  }
+
+  const handleClearMultiSort = () => {
+    const first = sortSpecs[0] ?? { key: 'duration' as RvSortKey, dir: 1 as const }
+    const next: SortSpec[] = [first]
+    saveSortSpecs(next)
+    setSortSpecs(next)
   }
 
   const metas = useMemo(() => {
@@ -926,8 +998,8 @@ export function ResultsViewSwitcher({
   }, [items, tzByIata, displayTimezone])
 
   const sortedItems = useMemo(
-    () => sortItemsWithMeta(items, metas, rvSortKey, rvSortDir),
-    [items, metas, rvSortKey, rvSortDir],
+    () => sortItemsWithMeta(items, metas, sortSpecs),
+    [items, metas, sortSpecs],
   )
 
   const total = items.length
@@ -940,7 +1012,7 @@ export function ResultsViewSwitcher({
           <h2 className="rv-title">{title}</h2>
           {total > 0 && <span className="rv-count muted small">{total} itinerar{total === 1 ? 'y' : 'ies'}</span>}
         </div>
-        <SortButtons sortKey={rvSortKey} sortDir={rvSortDir} onSort={handleSort} />
+        <SortButtons sortSpecs={sortSpecs} onSort={handleSort} onClear={handleClearMultiSort} />
         <span className="rv-header-sep" aria-hidden />
         <ViewToggle view={view} onView={handleView} />
       </div>
@@ -963,7 +1035,7 @@ export function ResultsViewSwitcher({
 
       {view === 'list' && (
         <ListView
-          items={sortedItems} metas={metas} sortKey={rvSortKey} sortDir={rvSortDir} onSort={handleSort}
+          items={sortedItems} metas={metas} sortSpecs={sortSpecs} onSort={handleSort}
           tzByIata={tzByIata} displayTimezone={displayTimezone} namesByIata={namesByIata}
           priceCurrency={priceCurrency} gfOrigins={gfOrigins} gfDestinations={gfDestinations}
           linkDate={linkDate} returnDate={returnDate} cabinClass={cabinClass}

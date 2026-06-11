@@ -6331,6 +6331,9 @@ button.pw-stat-col.pw-stat-sorted {
 .rv-sortbtn:hover { color: var(--ink-0); background: var(--hover); }
 .rv-sortbtn.on { color: #fff; background: var(--sel-grad); border-color: var(--sel); box-shadow: 0 1px 4px rgba(63,123,224,0.4), inset 0 1px 0 rgba(255,255,255,0.22); }
 .rv-caret { opacity: 0.75; }
+.rv-sort-rank { font-size: 9px; line-height: 1; margin-left: 2px; vertical-align: super; opacity: 0.85; }
+.rv-sortbtn--clear { padding: 0 9px; color: var(--muted); border-color: var(--border); font-size: 11px; }
+.rv-sortbtn--clear:hover { color: var(--ink-0); background: var(--hover); border-color: var(--border-strong); }
 
 /* ── View toggle */
 .rv-viewtoggle { display: flex; gap: 2px; }
